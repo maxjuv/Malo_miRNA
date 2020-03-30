@@ -1,4 +1,4 @@
-from configuration_Malo import *
+from configuration import *
 import os
 os.system('pwd')
 os.system('which python')
@@ -39,8 +39,9 @@ def compute_all():
 
 def precompute_sleep_state_by_epoch(group):
 
-    files = get_mice(group)
-    mice = np.unique([str(y.split('.')[0][:-2]) for y in files]).tolist()
+    # files = get_mice(group)
+    mice = get_mice(group)
+    # mice = np.unique([str(y.split('.')[0][:-2]) for y in files]).tolist()
     print(mice)
     # days = np.unique([str(y.split('.')[0][-2:]) for y in files]).tolist()
     # print(days)
@@ -55,9 +56,9 @@ def precompute_sleep_state_by_epoch(group):
     for mouse in mice :
         data = []
         for day in days :
-            print(data_dir  + group+ "/" + mouse + day + ".txt")
+            print(data_dir  + group+ "/" + mouse + 'DCR'+day + ".txt")
 
-            data_per_day = np.loadtxt(data_dir  +"/"+ group+ "/" + mouse + day + ".txt", dtype = str)
+            data_per_day = np.loadtxt(data_dir  +"/Scoring/"+ group+ "/" + mouse + 'DCR'+day + ".txt", dtype = str)
             # print(data_per_day.size)
             for number, letter in zip (numbers, letters):
                 data_per_day = np.where(data_per_day == number, letter, data_per_day)
@@ -390,7 +391,7 @@ def sleep_bouts(group):
             selected_data = data[i1: i2]
             # print(diff.where(diff == -1))
             all_mice_count = {}
-            print('je suis la')
+            # print('je suis la')
             for mouse in mice :
                 one_and_zeros_one_mouse = selected_data[mouse].values
                 counter = 0
@@ -505,12 +506,12 @@ if __name__ == '__main__' :
     #group = "Control"
 
     # precompute_sleep_state_by_epoch(group)
-    sleep_bouts(group)
+    # sleep_bouts(group)
     # sleep_state_statistics(group)
     # plot_sleep_state_accross_time(group)
     # plot_compare_sleep_state_accross_time(group)
 
-    #compute_all()
+    compute_all()
     # sleep_bouts_all()
     # sleep_state_statistics_all()
     # plt.show()

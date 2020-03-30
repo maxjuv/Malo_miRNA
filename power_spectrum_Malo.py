@@ -1,437 +1,792 @@
-from configuration_Malo import *
-from select_mice_cata_Malo import get_mice_for_spectrum
+from configuration import *
+from select_mice_cata_Malo import get_mice
+from sklearn.metrics import auc
 
 local_path = os.path.dirname(os.path.realpath(__file__))
 print(local_path)
 
-def compute_all():
-    dcr_mice = get_mice_for_spectrum(group = 'DCR-HCRT')
-    control_mice = get_mice_for_spectrum(group = 'Control')
-    animals_by_group = {'DCR-HCRT' : dcr_mice, 'Control' : control_mice}
-    for group in animals_by_group :
-        mice = animals_by_group[group]
-        for mouse in mice :
-            print(mouse)
-            for rec in ['b1', 'b2', 'sd', 'r1']:
-                try:
-                    store_scoring_and_spectrums_one_mouse_one_session(group, mouse, rec)
-                except :
-                    print('******* ERROR ******', mouse,rec, '*********')
 
-def compute_one_group(group =  'Control'):
-    mice = get_mice_for_spectrum(group)
-    for mouse in mice :
-        print(mouse)
-        for rec in ['b1', 'b2', 'sd', 'r1']:
-            try:
-                store_scoring_and_spectrums_one_mouse_one_session(group, mouse, rec)
-            except :
-                print('******* ERROR ******', mouse,rec, '*********')
-
-
-def store_scoring_and_spectrums_one_mouse_one_session(group, mouse,rec):
-    print( 'compute {} session'.format(rec))
-    #######         Extract scoring         #######
-    score = np.loadtxt(data_dir + '/' + group + '/' + mouse + 'DCR' + rec + '.txt', dtype = str)
-    print(score.shape)
-    ######      Caution ! Do not remove 1, 2, 3. It correspond to invalid EEG
-    # for f, n in zip(['1', '2', '3'], ['w', 'n', 'r']) :
-    #     score = np.where(score == f, n, score)
-
-    #######         Extract spectrums from txt        #######
-    file = open(data_spectrum_dir + '/{}/MTA-{}/{}DCR{}s.txt'.format(group, mouse, mouse, rec))
-    real_time_lines = []
-    data_lines = []
-    real_times = []
-    data = []
-    delta_power = []
-
-
-    for i, line in enumerate(file.readlines()) :
-        if line == 'Power Spectrum\n':
-            real_time_lines.append(i+1)
-            data_lines.append(i+2)
-        if i in real_time_lines:
-            real_times.append(line[:-1])
-        if i in data_lines :
-            spec = np.array(line.split('\t')[:-1], dtype = float)[4:]    ####Remove .5 Hz     #######
-            data.append(spec)
-            delta_power.append(np.mean(spec[:15])) #####delta = .75 to 4Hz
-
-    #######         Storing          #######
-    freqs = np.arange(4, spec.size+4, 1) * .25
-    times = np.arange(len(real_times))*int(4)
-
-    coords = {'real_times' : real_times, 'times' : times, 'freqs' : freqs}
-    ds = xr.Dataset(coords = coords)
-    data = np.array(data)
-    ds['spectrums'] = xr.DataArray(data, dims = ['times', 'freqs'])
-    ds['delta_power'] = xr.DataArray(np.array(delta_power), dims = 'times')
-    ds['score'] = xr.DataArray(score, dims = 'times')
-
-
-    dirname = precompute_dir + '/{}/spectrum/'.format(group)
-    if not os.path.exists(dirname):
-        os.makedirs(dirname)
-    ds.to_netcdf(dirname + mouse + 'DCR'+ rec  + '.nc', mode='w')
-
-
-def plot_anomalies(group, mouse, rec, hours):
-    ds = xr.open_dataset(precompute_dir + '/' + group +'/spectrum/' + mouse + 'DCR' + rec + '.nc')
+def get_clear_spectral_score_one_mouse_one_condition(mouse, condition, state):
+    debug = False
+    ds = xr.open_dataset(precompute_dir + '/spectrums/spectrum_scoring_{}.nc'.format(mouse))
+    times = ds.coords['times_somno'].values/3600
     score = ds['score'].values
-    freqs = ds.coords['freqs'].values[:60]
-    times = ds.coords['times'].values
-    delta_power = ds['delta_power']
-    spectrums = ds['spectrums'].values[:,:60]
-    mask = (times>hours[0]*3600) & (times<hours[1]*3600)
-    fig, ax = plt.subplots()
-    ax.plot(delta_power[mask])
-    plt.show()
-    for i in np.where(mask)[0]:
-        print(i/3600*4)
-        print(delta_power[i].values)
+
+    if condition == 'bl1':
+        t2 = 24
+        mask = (times<t2)
+    elif condition == 'bl2':
+        t1, t2 = 24, 48
+        mask = (times>=t1) & (times<t2)
+    elif condition == 'sd':
+        t1, t2 = 48+6, 72
+        mask = (times>=t1) & (times<t2)
+    elif condition == 'r1':
+        t1 = 72
+        mask = (times>=t1)
+    else :
+        print('Condition does not exist !')
+
+    # mask = (times>=t1) & (times<t2)
+    score = score[mask]
+
+    score_no_artifact = score == state
+    score_no_transition = score_no_artifact.copy()
+    count = 0
+    event_length = []
+    for num, value in enumerate(score_no_artifact) :
+        if value:
+            count +=1
+        elif value == False:
+            event_length.append(count)
+            if count == 1 :
+                score_no_transition[num-1] = False
+            elif count == 2 :
+                score_no_transition[num-1] = False
+                score_no_transition[num-2] = False
+                count = 0
+            elif count > 2 :
+                score_no_transition[num-1] = False
+                score_no_transition[num-count] = False
+            count = 0
+    if count == 1 :
+        score_no_transition[num-1] = False
+    elif count == 2 :
+        score_no_transition[num-1] = False
+        score_no_transition[num-2] = False
+        count = 0
+    elif count > 2 :
+        score_no_transition[num-1] = False
+        score_no_transition[num-count] = False
+
+
+    if debug :
         fig, ax = plt.subplots()
-        ax.plot(freqs, spectrums[i])
+        s = ds.coords['times_somno'].values.size
+        for i in range(5):
+            ax.axvline(i*s/(3600))
+        h = ds.coords['times_somno'].values/3600
+        ax.plot(h, np.ones(s))
+        ax.plot(h[mask], np.ones(s)[mask])
+        ax.plot(h[mask], score == state)
+
+        fig, ax = plt.subplots()
+        ax.scatter(h[mask], score_no_artifact)
+        ax.plot(h[mask], score_no_transition, color = 'green')
+        print(count)
         plt.show()
-        # exit()
+
+    return score_no_transition, mask
+
+def get_relative_spectrums_one_mouse_one_condition(mouse, condition, spectrum_method = 'somno'):
+    debug = 0
+    cleared_score_w, _= get_clear_spectral_score_one_mouse_one_condition(mouse, condition, 'w')
+    cleared_score_r, _ = get_clear_spectral_score_one_mouse_one_condition(mouse, condition, 'r')
+    cleared_score_n, mask_condition = get_clear_spectral_score_one_mouse_one_condition(mouse, condition, 'n')
+
+    ds = xr.open_dataset(precompute_dir + '/spectrums/spectrum_scoring_{}.nc'.format(mouse))
+
+    spectrum = ds['{}_spectrum'.format(spectrum_method)].values
+    freqs = ds.coords['freqs_{}'.format(spectrum_method)].values
+    spectrum = spectrum[mask_condition, :]
+
+    total_epochs = sum(cleared_score_w) + sum(cleared_score_r) + sum(cleared_score_n)
+
+    proportion_w = sum(cleared_score_w)/total_epochs
+    proportion_r = sum(cleared_score_r)/total_epochs
+    proportion_n = sum(cleared_score_n)/total_epochs
+
+    absolute_spectrum_w = np.mean(spectrum[cleared_score_w, :], axis = 0)
+    absolute_spectrum_r = np.mean(spectrum[cleared_score_r, :], axis = 0)
+    absolute_spectrum_n = np.mean(spectrum[cleared_score_n, :], axis = 0)
+
+    #########CAUTION power spectrum is area under curv#########
+    auc_w = auc(freqs, absolute_spectrum_w)
+    auc_r = auc(freqs, absolute_spectrum_r)
+    auc_n = auc(freqs, absolute_spectrum_n)
+    ref_values = proportion_w*auc_w + proportion_r*auc_r + proportion_n*auc_n
+
+
+    ####FALSE
+    # mean_w = np.mean(absolute_spectrum_w)
+    # mean_r = np.mean(absolute_spectrum_r)
+    # mean_n = np.mean(absolute_spectrum_n)
+    # ref_values = proportion_w*mean_w + proportion_r*mean_r + proportion_n*mean_n
 
 
 
-def plot_spectrum_by_state_one_mouse_one_session(group, mouse, rec):
-    ds = xr.open_dataset(precompute_dir + '/' + group +'/spectrum/' + mouse + 'DCR' + rec + '.nc')
+    #####ALi's
+    # sum_w = np.sum(absolute_spectrum_w)
+    # sum_r = np.sum(absolute_spectrum_r)
+    # sum_n = np.sum(absolute_spectrum_n)
+    # ref_values = (proportion_w*sum_w + proportion_r*sum_r + proportion_n*sum_n)/100
+    #
+    # relative_spectrum_w = 100*absolute_spectrum_w / ref_values
+    # relative_spectrum_r = 100*absolute_spectrum_r / ref_values
+    # relative_spectrum_n = 100*absolute_spectrum_n / ref_values
+
+    # print(ref_values)
+    # fig, ax = plt.subplots()
+    # global_spec = np.mean(spectrum[cleared_score_w + cleared_score_r + cleared_score_n], axis = 0)
+    # print(auc(freqs,global_spec))
+    # ax.plot(freqs,global_spec )
+    # ax.plot(freqs,global_spec/ref_values )
+    #
+    #
+    # fig, ax = plt.subplots()
+    # ax.plot(freqs, relative_spectrum_w)
+    # ax.plot(freqs, relative_spectrum_r)
+    # ax.plot(freqs, relative_spectrum_n)
+    # plt.show()
+
+    if debug == True:
+        fig, ax = plt.subplots()
+        ax.plot(absolute_spectrum_w, color = 'blue')
+        ax.plot(absolute_spectrum_r, color = 'blue')
+        ax.plot(absolute_spectrum_n, color = 'blue')
+
+        ax.plot(relative_spectrum_w, color = 'green')
+        ax.plot(relative_spectrum_r, color = 'green', alpha = .66)
+        ax.plot(relative_spectrum_n, color = 'green', alpha = .33)
+        plt.show()
+
+    return ref_values, {'w' : relative_spectrum_w, 'r':relative_spectrum_r, 'n' :relative_spectrum_n}
+
+def get_clear_spectral_score_one_mouse_one_condition_day_night(mouse, condition, state, period = 'light'):
+    debug = 0
+    ds = xr.open_dataset(precompute_dir + '/spectrums/spectrum_scoring_{}.nc'.format(mouse))
+    times = ds.coords['times_somno'].values/3600
     score = ds['score'].values
-    score_behavior = score.copy()
-    for f, n in zip(['1', '2', '3'], ['w', 'n', 'r']) :
-        score_behavior = np.where(score_behavior == f, n, score_behavior)
 
-    freqs = ds.coords['freqs'].values[:60]
-    times = ds.coords['times']
-    t_start = ds.coords['real_times'].values[0]
-    t_start = t_start.split('.')[0]
-    t_start = t_start.split(':')
-    t_start = float(t_start[0]) +float(t_start[1])/60 + float(t_start[2])/3600
+    if condition == 'bl1':
+        if period == 'light':
+            t1 = 12
+            mask = (times<t1)
+        elif period == 'dark':
+            t1, t2 = 12, 24
+            mask = (times>=t1) & (times<t2)
+    elif condition == 'bl2':
+        if period == 'light':
+            t1, t2 = 24, 36
+            mask = (times>=t1) & (times<t2)
+        elif period == 'dark':
+            t1, t2 = 36, 48
+            mask = (times>=t1) & (times<t2)
+    elif condition == 'sd':
+        if period == 'light':
+            t1, t2 = 54, 60    #####caution 6 first hours is SD 48 to 54
+            mask = (times>=t1) & (times<t2)
+        elif period == 'dark':
+            t1, t2 = 60, 72
+            mask = (times>=t1) & (times<t2)
+    elif condition == 'r1':
+        if period == 'light':
+            t1, t2 = 72, 84
+            mask = (times>=t1) & (times<t2)
+        elif period == 'dark':
+            t1 = 84
+            mask = (times>=t1)
+    else :
+        print('Condition does not exist !')
+
+    # mask = (times>=t1) & (times<t2)
+    score = score[mask]
+
+    score_no_artifact = score == state
+    score_no_transition = score_no_artifact.copy()
+    count = 0
+    event_length = []
+    for num, value in enumerate(score_no_artifact) :
+        if value:
+            count +=1
+        elif value == False:
+            event_length.append(count)
+            if count == 1 :
+                score_no_transition[num-1] = False
+            elif count == 2 :
+                score_no_transition[num-1] = False
+                score_no_transition[num-2] = False
+                count = 0
+            elif count > 2 :
+                score_no_transition[num-1] = False
+                score_no_transition[num-count] = False
+            count = 0
+    if count == 1 :
+        score_no_transition[num-1] = False
+    elif count == 2 :
+        score_no_transition[num-1] = False
+        score_no_transition[num-2] = False
+        count = 0
+    elif count > 2 :
+        score_no_transition[num-1] = False
+        score_no_transition[num-count] = False
+
+
+    if debug :
+        fig, ax = plt.subplots()
+        s = ds.coords['times_somno'].values.size
+        for i in range(5):
+            ax.axvline(i*s/(3600))
+        h = ds.coords['times_somno'].values/3600
+        ax.plot(h, np.ones(s))
+        ax.plot(h[mask], np.ones(s)[mask])
+        ax.plot(h[mask], score == state)
+
+        fig, ax = plt.subplots()
+        ax.scatter(h[mask], score_no_artifact)
+        ax.plot(h[mask], score_no_transition, color = 'green')
+        print(count)
+        plt.show()
+    if sum(score_no_transition) == 0:
+        print('_________ No {} for {} during {} {}________'.format(state, mouse, condition, period))
+    return score_no_transition, mask
+
+def get_relative_spectrums_one_mouse_one_condition_day_night(mouse, condition, spectrum_method = 'somno', period = 'light'):
+    debug = 0
+    cleared_score_w, _= get_clear_spectral_score_one_mouse_one_condition_day_night(mouse, condition, 'w', period = period)
+    cleared_score_r, _ = get_clear_spectral_score_one_mouse_one_condition_day_night(mouse, condition, 'r', period = period)
+    cleared_score_n, mask_condition = get_clear_spectral_score_one_mouse_one_condition_day_night(mouse, condition, 'n', period = period)
+
+    ds = xr.open_dataset(precompute_dir + '/spectrums/spectrum_scoring_{}.nc'.format(mouse))
+
+    spectrum = ds['{}_spectrum'.format(spectrum_method)].values
+    freqs = ds.coords['freqs_{}'.format(spectrum_method)].values
+    spectrum = spectrum[mask_condition, :]
+
+    total_epochs = sum(cleared_score_w) + sum(cleared_score_r) + sum(cleared_score_n)
+
+    proportion_w = sum(cleared_score_w)/total_epochs
+    proportion_r = sum(cleared_score_r)/total_epochs
+    proportion_n = sum(cleared_score_n)/total_epochs
+
+    absolute_spectrum_w = np.mean(spectrum[cleared_score_w, :], axis = 0)
+    absolute_spectrum_r = np.mean(spectrum[cleared_score_r, :], axis = 0)
+    absolute_spectrum_n = np.mean(spectrum[cleared_score_n, :], axis = 0)
+
+    #########CAUTION power spectrum is area under curv#########
+    # auc_w = auc(freqs, absolute_spectrum_w)
+    # auc_r = auc(freqs, absolute_spectrum_r)
+    # auc_n = auc(freqs, absolute_spectrum_n)
+    # ref_values = proportion_w*auc_w + proportion_r*auc_r + proportion_n*auc_n
+
+
+    ####FALSE
+    # mean_w = np.mean(absolute_spectrum_w)
+    # mean_r = np.mean(absolute_spectrum_r)
+    # mean_n = np.mean(absolute_spectrum_n)
+    # ref_values = proportion_w*mean_w + proportion_r*mean_r + proportion_n*mean_n
 
 
 
-    delta_power = ds['delta_power']
-    states = ['w', 'n', 'r', 'a']
+    #####ALi's
+    sum_w = np.sum(absolute_spectrum_w)
+    sum_r = np.sum(absolute_spectrum_r)
+    sum_n = np.sum(absolute_spectrum_n)
+    ref_values = (proportion_w*sum_w + proportion_r*sum_r + proportion_n*sum_n)
 
-    hours = np.arange(int(times.size*4/3600))
-    delta_power_by_hour = np.zeros(hours.size)
-    std_delta_power_by_hour = delta_power_by_hour.copy()
-    for h in hours[:-1]:
-        # print(h)
-        subdata = delta_power[int(3600/4*h):int(3600/4*(h+1))]
-        subscore = score[int(3600/4*h):int(3600/4*(h+1))]
-        artifact_free = (subscore != '1') & (subscore != '2') & (subscore != '3')
-        subdata = subdata[artifact_free]
-        m = np.mean(subdata)
-        std = np.std(subdata)
-        delta_power_by_hour[h] = m
-        std_delta_power_by_hour[h] = std
+    relative_spectrum_w = 100*absolute_spectrum_w / ref_values
+    relative_spectrum_r = 100*absolute_spectrum_r / ref_values
+    relative_spectrum_n = 100*absolute_spectrum_n / ref_values
 
-    fig, ax = plt.subplots()
-    ax.plot(hours+t_start, delta_power_by_hour, color = 'darkgreen')
-    ax.fill_between(hours+t_start, delta_power_by_hour-std_delta_power_by_hour, delta_power_by_hour+std_delta_power_by_hour, color = 'darkgreen', alpha = .5)
-    fig.suptitle('Delta power for {}{}'.format(mouse, rec))
+    # print(ref_values)
+    # fig, ax = plt.subplots()
+    # global_spec = np.mean(spectrum[cleared_score_w + cleared_score_r + cleared_score_n], axis = 0)
+    # print(auc(freqs,global_spec))
+    # ax.plot(freqs,global_spec )
+    # ax.plot(freqs,global_spec/ref_values )
+    #
+    #
+    # fig, ax = plt.subplots()
+    # ax.plot(freqs, relative_spectrum_w)
+    # ax.plot(freqs, relative_spectrum_r)
+    # ax.plot(freqs, relative_spectrum_n)
+    # plt.show()
 
-    fig, ax = plt.subplots()
-    ax.plot(times, delta_power, color = 'black')
+    if debug == True:
+        fig, ax = plt.subplots()
+        ax.plot(absolute_spectrum_w, color = 'blue')
+        ax.plot(absolute_spectrum_r, color = 'blue')
+        ax.plot(absolute_spectrum_n, color = 'blue')
 
-    spectrums = ds['spectrums'].values[:,:60]
-    print(spectrums.shape)
-    fig,ax = plt.subplots(nrows = 2, ncols= 4, sharex = True)
+        ax.plot(relative_spectrum_w, color = 'green')
+        ax.plot(relative_spectrum_r, color = 'green', alpha = .66)
+        ax.plot(relative_spectrum_n, color = 'green', alpha = .33)
+        plt.show()
+    if mouse in get_mice('DCR-HCRT'):
+        cleared_score_a, _ = get_clear_spectral_score_one_mouse_one_condition_day_night(mouse, condition, 'a', period = period)
+        absolute_spectrum_a = np.mean(spectrum[cleared_score_a, :], axis = 0)
+        relative_spectrum_a = 100*absolute_spectrum_a / ref_values
+        return ref_values, {'w' : relative_spectrum_w, 'r':relative_spectrum_r, 'n' :relative_spectrum_n, 'a' :relative_spectrum_a}
+    else :
+        return ref_values, {'w' : relative_spectrum_w, 'r':relative_spectrum_r, 'n' :relative_spectrum_n}
 
-    for s, state in enumerate(states) :
-        state_spectrum = spectrums[score == state]
-        print(state_spectrum.shape)
-        ax[1,s].plot(freqs,state_spectrum.T, color = 'black', alpha = .01)
 
-        m = state_spectrum.mean(axis=0)
-        std = state_spectrum.std(axis=0)
-        ax[1,s].plot(freqs,m, color = 'darkgreen')
-        ax[0,s].plot(freqs,m, color = 'darkgreen')
-        ax[0,s].fill_between(freqs, m-std, m+std, color = 'darkgreen', alpha = .3)
-        ax[1,s].plot(freqs, m+std, color = 'darkgreen', alpha = .6, ls = '--')
-        lim = max(m+std)
-        ax[0,s].set_ylim(0, lim*1.25)
-        # ax[0,s].set_ylim(0, 30*10**-5)
-        # ax[1,s].set_ylim(0, lim*4)
-        ax[1,s].set_ylim(0, 30*10**-5)
-        ax[0,s].set_title(state)
+
+
+def plot_spectrum_compare_global(spectrum_method = 'somno'):
+    control_list = get_mice('Control')
+    DCR_list = get_mice('DCR-HCRT')
+    groups = {'Control' : control_list, 'DCR-HCRT' : DCR_list}
+    ds = xr.open_dataset(precompute_dir + '/spectrums/spectrum_scoring_B2533.nc')
+    freqs = ds.coords['freqs_{}'.format(spectrum_method)].values.tolist()
+
+    indices = []
+    for state in ['w', 'n', 'r']:
+        for session in ['bl1', 'bl2', 'sd', 'r1' ]:
+            indices+=([i + '_'+session+ '_'+state for i in control_list+ DCR_list])
+    df_spectrum = pd.DataFrame(index = indices, columns = ['group', 'session', 'state', 'ref_values'] + freqs)
+
+
+
+    for group in groups:
+        for mouse in groups[group]:
+            ds = xr.open_dataset(precompute_dir + '/spectrums/spectrum_scoring_{}.nc'.format(mouse))
+            freqs = ds.coords['freqs_{}'.format(spectrum_method)].values
+            ZT = ds.coords['times_somno'].values
+            print('collecting relative spectrums ', mouse)
+
+            states = ['w', 'n', 'r']
+            conditions = ['bl1', 'bl2', 'sd', 'r1']
+
+            for condition in conditions:
+                ref_values, relative_spectrums = get_relative_spectrums_one_mouse_one_condition(mouse, condition)
+                for state in states :
+                    df_spectrum.at['{}_{}_{}'.format(mouse,condition, state), 'state'] = state
+                    df_spectrum.at['{}_{}_{}'.format(mouse,condition, state), 'session'] = condition
+                    df_spectrum.at['{}_{}_{}'.format(mouse,condition, state), 'group'] = group
+                    df_spectrum.at['{}_{}_{}'.format(mouse,condition, state), 'ref_values'] = ref_values
+                    df_spectrum.at['{}_{}_{}'.format(mouse,condition, state), 4:] = relative_spectrums[state]
+
+        # df_spectrum = df_spectrum.dropna()
+    fig,ax = plt.subplots(nrows = 4, ncols= 3, sharex = True, sharey = True)
+    fig.suptitle('Spectrum per state')
+
+    fig_diff, ax_diff = plt.subplots(nrows = 4, ncols= 3, sharex = True, sharey = True)
+    fig_diff.suptitle('Diff DCR - ctrl')
+    for row, session in enumerate(conditions):
+        for col, state in enumerate(states):
+            if state == 'a':
+                continue
+            # print(df_spectrum[(df_spectrum.session == session)& (df_spectrum.state == state)])
+            data_dcr = df_spectrum[(df_spectrum.session == session) & (df_spectrum.group == 'DCR-HCRT') & (df_spectrum.state == state)]
+            data_ctrl = df_spectrum[(df_spectrum.session == session) & (df_spectrum.group == 'Control') & (df_spectrum.state == state)]
+            data_dcr = (data_dcr[freqs]).values
+            data_ctrl = (data_ctrl[freqs]).values
+            # print()
+            # for i, maxi in enumerate(np.max(data_dcr, axis = 1)):
+            #     data_dcr[i] = data_dcr[i]/maxi
+            # for i, maxi in enumerate(np.max(data_ctrl, axis = 1)):
+            #     data_ctrl[i] = data_ctrl[i]/maxi
+            diff = np.mean(data_dcr, axis=0) - np.mean(data_ctrl, axis=0)
+            # ax[row, col].plot(data.T, color = 'black', alpha = .1)
+            # ax[row, col].plot(data.mean(axis = 0), color = 'red')
+            ax_diff[row, col].plot(freqs, diff )
+
+    for group in ['Control', 'DCR-HCRT']:
+        for row, session in enumerate(conditions):
+            for col, state in enumerate(states):
+                if group == 'Control' and state == 'a':
+                    continue
+                print(group, session, state)
+                data = df_spectrum[(df_spectrum.session == session) & (df_spectrum.group == group) & (df_spectrum.state == state)]
+                data = (data[freqs]).values
+                plot = np.mean(data, axis=0)
+                # inf, med, sup = np.percentile(data, [25,50,75], axis=0)
+                # inf = np.array(inf, dtype = 'float64')
+                # sup = np.array(sup, dtype = 'float64')
+                # med = np.array(med, dtype = 'float64')
+
+                # ax[row, col].plot(data.T, color = 'black', alpha = .1)
+                ax[row, col].plot(freqs,plot)
+
+                # ax[row, col].plot(freqs, med )
+                # ax[row, col].fill_between(x =freqs, y1 = inf, y2 = sup, alpha = .5 )
+
+
+                # plt.show()
     plt.show()
 
-def plot_spectrum_by_state_one_mouse(group, mouse):
-    ds_b1 = xr.open_dataset(precompute_dir + '/' + group +'/spectrum/' + mouse  + 'DCRb1.nc')
-    ds_b2 = xr.open_dataset(precompute_dir + '/' + group +'/spectrum/' + mouse + 'DCRb2.nc')
-    ds_sd = xr.open_dataset(precompute_dir + '/' + group +'/spectrum/' + mouse + 'DCRsd.nc')
-    ds_r = xr.open_dataset(precompute_dir + '/' + group +'/spectrum/' + mouse + 'DCRr1.nc')
-    score = np.concatenate((ds_b1['score'].values,ds_b2['score'].values,ds_sd['score'].values,ds_r['score'].values))
-    score_behavior = score.copy()
-    for f, n in zip(['1', '2', '3'], ['w', 'n', 'r']) :
-        score_behavior = np.where(score_behavior == f, n, score_behavior)
 
-    freqs = ds_b1.coords['freqs'].values[:60]
-    t_start = ds_b1.coords['real_times'].values[0]
-    t_start = t_start.split('.')[0]
-    t_start = t_start.split(':')
-    t_start = float(t_start[0]) +float(t_start[1])/60 + float(t_start[2])/3600
+def plot_backup_spectrum_compare(spectrum_method = 'somno'):
+    control_list = get_mice('Control')
+    DCR_list = get_mice('DCR-HCRT')
+    groups = {'Control' : control_list, 'DCR-HCRT' : DCR_list}
+    ds = xr.open_dataset(precompute_dir + '/spectrums/spectrum_scoring_B2533.nc')
+    freqs = ds.coords['freqs_{}'.format(spectrum_method)].values.tolist()
+    df_ratio = pd.DataFrame(index = control_list+ DCR_list, columns = np.arange(96))
+    indices = []
+    for state in ['w', 'n', 'r', 'a']:
+        for session in ['bl1', 'bl2', 'sd', 'r1' ]:
+            indices+=([i + '_'+session+ '_'+state for i in control_list+ DCR_list])
+    df_spectrum = pd.DataFrame(index = indices, columns = ['group', 'session', 'state'] + freqs)
+
+    fig,ax = plt.subplots(nrows = 4, ncols= 4, sharex = True, sharey = True)
+    fig. suptitle('Spectrum per state')
+    for group in groups:
+        for mouse in groups[group]:
+            ds = xr.open_dataset(precompute_dir + '/spectrums/spectrum_scoring_{}.nc'.format(mouse))
+            print(ds)
+            # mask = [0:int(12*3600*sr)]
+            score = ds['score'].values
+            score_behavior = score.copy()
+            for f, n in zip(['1', '2', '3'], ['w', 'n', 'r']) :
+                score_behavior = np.where(score_behavior == f, n, score_behavior)
+
+            freqs = ds.coords['freqs_{}'.format(spectrum_method)].values
+            times = ds.coords['epochs'].values
+            t_start = 8.
+            real_times = times + t_start
+
+            spectrums = ds['{}_spectrum'.format(spectrum_method)].values
+            # print(spectrums.values[np.isnan(spectrums.values)])
+            # print(spectrums.max(dims = 'freqs_{}'.format(spectrum_method)))
+            # spectrums = (spectrums/spectrums.max(dims = 'freqs_{}'.format(spectrum_method))).values
+            # print(np.max(spectrums, axis = 1).shape)
+
+            # spectrums = spectrums/np.max(spectrums, axis = 1)
+            # spectrums = spectrums*freqs
+            sr =200
+
+            delta_power = ds['{}_delta_power'.format(spectrum_method)].values
+            states = ['w', 'n', 'r', 'a']
+
+            hours = np.arange(int(times.size*4/3600))
+            delta_power_by_hour = np.zeros(hours.size)
+            std_delta_power_by_hour = delta_power_by_hour.copy()
+            for h in hours[:-1]:
+                subdata = delta_power[int(3600/4*h):int(3600/4*(h+1))]
+                subscore = score[int(3600/4*h):int(3600/4*(h+1))]
+                # artifact_free = (subscore != '1') & (subscore != '2') & (subscore != '3')
+                nrem = subscore == 'n'
+                subdata = subdata[nrem]
+                m = np.mean(subdata)
+                std = np.std(subdata)
+                delta_power_by_hour[h] = m
+                std_delta_power_by_hour[h] = std
+            norm_delta_power_by_hour = delta_power_by_hour/max(delta_power_by_hour) ####A REPRENDRE
+            df_ratio.at[mouse, :] = norm_delta_power_by_hour
+
+            mydict = {'bl1' : (0, 24), 'bl2' : (24,48), 'sd':(48,72), 'r1':(78, 102)}
+            for s, state in enumerate(states) :
+                for row, phase in enumerate(mydict):
+                    ind1, ind2 = mydict[phase][0]*900, mydict[phase][1]*900
+                    score_phase = score[ind1 : ind2]
+                    spectrum_phase = spectrums[ind1 :ind2,:]
+                    score_no_transition = score_phase == state
+                    count = 0
+                    event_length = []
+                    for num, value in enumerate(score_no_transition) :
+                        if value:
+                            count +=1
+                        elif value == False:
+                            event_length.append(count)
+                            if count == 1:
+                                score_no_transition[num-1] = False
+                            count = 0
+                    state_spectrum = spectrum_phase[score_no_transition]
+                    if state_spectrum.shape[0] <= 1:
+                        continue
+
+                    m = state_spectrum.mean(axis=0)
+                    df_spectrum.at['{}_{}_{}'.format(mouse,phase, state), 'state'] = state
+                    df_spectrum.at['{}_{}_{}'.format(mouse,phase, state), 'session'] = phase
+                    df_spectrum.at['{}_{}_{}'.format(mouse,phase, state), 'group'] = group
+                    df_spectrum.at['{}_{}_{}'.format(mouse,phase, state), 3:] = m
+        # df_spectrum = df_spectrum.dropna()
+    fig_diff, ax_diff = plt.subplots(nrows = 4, ncols= 4, sharex = True, sharey = True)
+    fig_diff.suptitle('Diff DCR - ctrl')
+    for row, session in enumerate(mydict):
+        for col, state in enumerate(states):
+            if state == 'a':
+                continue
+            # print(df_spectrum[(df_spectrum.session == session)& (df_spectrum.state == state)])
+            data_dcr = df_spectrum[(df_spectrum.session == session) & (df_spectrum.group == 'DCR-HCRT') & (df_spectrum.state == state)]
+            data_ctrl = df_spectrum[(df_spectrum.session == session) & (df_spectrum.group == 'Control') & (df_spectrum.state == state)]
+            data_dcr = (data_dcr[freqs]).values
+            data_ctrl = (data_ctrl[freqs]).values
+            # print()
+            # for i, maxi in enumerate(np.max(data_dcr, axis = 1)):
+            #     data_dcr[i] = data_dcr[i]/maxi
+            # for i, maxi in enumerate(np.max(data_ctrl, axis = 1)):
+            #     data_ctrl[i] = data_ctrl[i]/maxi
+            diff = np.mean(data_dcr, axis=0) - np.mean(data_ctrl, axis=0)
+            # ax[row, col].plot(data.T, color = 'black', alpha = .1)
+            # ax[row, col].plot(data.mean(axis = 0), color = 'red')
+            ax_diff[row, col].plot(freqs, diff )
+
+    for group in ['Control', 'DCR-HCRT']:
+        for row, session in enumerate(mydict):
+            for col, state in enumerate(states):
+                if group == 'Control' and state == 'a':
+                    continue
+                print(group, session, state)
+                # print(df_spectrum[(df_spectrum.session == session)& (df_spectrum.state == state)])
+                data = df_spectrum[(df_spectrum.session == session) & (df_spectrum.group == group) & (df_spectrum.state == state)]
+                data = (data[freqs]).values
+                # for i, maxi in enumerate(np.max(data, axis = 1)):
+                #     data[i] = data[i]/maxi
+                plot = np.mean(data, axis=0)
+                inf, med, sup = np.percentile(data, [25,50,75], axis=0)
+                inf = np.array(inf, dtype = 'float64')
+                sup = np.array(sup, dtype = 'float64')
+                med = np.array(med, dtype = 'float64')
+                # print(np.isfinite(inf))
+                # ax[row, col].plot(data.T, color = 'black', alpha = .1)
+                # ax[row, col].plot(data.mean(axis = 0), color = 'red')
+                ax[row, col].plot(freqs, med )
+                ax[row, col].fill_between(x =freqs, y1 = inf, y2 = sup, alpha = .5 )
 
 
-    fig, ax = plt.subplots()
-    ax.plot(ds_b1.coords['times'].values, ds_b1['delta_power'].values)
+                # plt.show()
+    plt.show()
+    exit()
 
-
-    delta_power = np.concatenate((ds_b1['delta_power'].values,ds_b2['delta_power'].values,ds_sd['delta_power'].values,ds_r['delta_power'].values))
-
-    times = np.arange(delta_power.size)*4
-    delta_power = np.concatenate((ds_b1['delta_power'].values,ds_b2['delta_power'].values,ds_sd['delta_power'].values,ds_r['delta_power'].values))
-
-    times = np.arange(delta_power.size)*4
-    print(delta_power.shape)
-    states = ['w', 'n', 'r', 'a']
-
-
-    fig, ax = plt.subplots()
-    ax.plot(times, delta_power)
-    fig.suptitle('Delta power every 4s')
-
-
-    step = .5
-    hours = np.arange(int(times.size*(1/step)*4/3600))
-    delta_power_by_hour = np.zeros(hours.size)
-    std_delta_power_by_hour = delta_power_by_hour.copy()
-    for h in hours[:-1]:
-        if h <24 :
-            delta_ref = np.mean(delta_power[int(8*3600):int(12*3600)])
-        elif h >=24 and h<48 :
-            delta_ref = np.mean(delta_power[int((8+24)*3600/4):int((12+24)*3600/4)])
-        elif h >=48 and h<72 :
-            delta_ref = np.mean(delta_power[int((8+48)*3600/4):int((12+48)*3600/4)])
-        elif h >=72 :
-            delta_ref = np.mean(delta_power[int((8+72)*3600/4):int((12+72)*3600/4)])
-
-        subdata = delta_power[int(step*3600/4*h):int(step*3600/4*(h+1))]/delta_ref
-        subscore =score[int(step*3600/4*h):int(step*3600/4*(h+1))]
-        mask = (subscore != '1') & (subscore != '2') & (subscore != '3')
-        # mask = (subscore != '1') | (subscore != '2') | (subscore != '3')
-        print(sum(mask))
-        m = np.mean(subdata[mask])
-        std = np.std(subdata[mask])
-        delta_power_by_hour[h] = m
-        std_delta_power_by_hour[h] = std
 
     fig, ax = plt.subplots()
     ax.plot(hours+t_start, delta_power_by_hour, color = 'darkgreen')
     ax.fill_between(hours+t_start, delta_power_by_hour-std_delta_power_by_hour, delta_power_by_hour+std_delta_power_by_hour, color = 'darkgreen', alpha = .5)
     fig.suptitle('Delta power for {}'.format(mouse))
 
-    plt.show()
-    exit()
-    spectrums = np.concatenate((ds_b1['spectrums'].values[:,:60],ds_b2['spectrums'].values[:,:60],ds_sd['spectrums'].values[:,:60],ds_r['spectrums'].values[:,:60]))
+    fig, ax = plt.subplots()
+    ax.plot(times, delta_power, color = 'black')
 
-    print(spectrums.shape)
-    fig,ax = plt.subplots(ncols= 4, sharex = True)
-
+    fig,ax = plt.subplots(nrows = 4, ncols= 4, sharex = True, sharey = True)
+    # fig,ax = plt.subplots(nrows = 2, ncols= 4, sharex = True)
+    mydict = {'bl1' : (0, 24), 'bl2' : (24,48), 'sd':(48,72), 'r1':(78, 102)}
     for s, state in enumerate(states) :
-        state_spectrum = spectrums[score == state]
-        print(state_spectrum.shape)
-        m = state_spectrum.mean(axis=0)
-        std = state_spectrum.std(axis=0)
-        ax[s].plot(freqs,m, color = 'darkgreen')
-        ax[s].fill_between(freqs, m-std, m+std, color = 'darkgreen', alpha = .3)
-        lim = max(m+std)
-        # ax[0,s].set_ylim(0, lim*1.25)
-        # ax[1,s].set_ylim(0, lim*4)
-        ax[s].set_ylim(0, 30*10**-5)
-        ax[s].set_title(state)
-        fig.suptitle('Power spectrum by state -- ' + mouse)
+        for row, phase in enumerate(mydict):
+            ind1, ind2 = mydict[phase][0]*900, mydict[phase][1]*900
+            print(ind1,ind2)
+            score_phase = score[ind1 : ind2]
+            spectrum_phase = spectrums[ind1 :ind2,:]
+            score_no_transition = score_phase == state
+            count = 0
+            event_length = []
+            for num, value in enumerate(score_no_transition) :
+                if value:
+                    count +=1
+                elif value == False:
+                    event_length.append(count)
+                    if count == 1:
+                        score_no_transition[num-1] = False
+                    count = 0
+
+            state_spectrum = spectrum_phase[score_no_transition]
+            if state_spectrum.shape[0] <= 1:
+                continue
+
+            print(state_spectrum.shape)
+            print(state)
+            # ax[1,s].plot(freqs,state_spectrum.T, color = 'black', alpha = .01)
+
+            m = state_spectrum.mean(axis=0)
+            std = state_spectrum.std(axis=0)
+            p90, median, p30 = np.percentile(state_spectrum, q = (90, 50, 30), axis=0)
+            # print(m)
+            ax[row,s].plot(freqs,median, color = 'darkgreen')
+            # ax[row,s].fill_between(freqs, p30, p90, color = 'darkgreen', alpha = .3)
+            # ax[s].fill_between(freqs, m-std, m+std, color = 'darkgreen', alpha = .3)
+            # ax[1,s].plot(freqs, m+std, color = 'darkgreen', alpha = .6, ls = '--')
+            lim = max(median+p90)
+            ax[row,s].set_ylim(0, lim*1.25)
+            # ax[0,s].set_ylim(0, 30*10**-5)
+            # ax[1,s].set_ylim(0, lim*4)
+            # ax[1,s].set_ylim(0, 30*10**-5)
+            ax[0,s].set_title(state)
     plt.show()
 
 
-def plot_compare_spectrum_DCR():
-    groups = ['DCR-HCRT', 'Control']
-    fig_delta, ax_delta = plt.subplots()
-    fig_spec, ax_spec =plt.subplots(nrows = 4)
-    ds_b1 = xr.open_dataset(precompute_dir + '/Control/spectrum/B4904DCRb1.nc')
-    ds_b2 = xr.open_dataset(precompute_dir + '/Control/spectrum/B4904DCRb2.nc')
-    ds_sd = xr.open_dataset(precompute_dir + '/Control/spectrum/B4904DCRsd.nc')
-    ds_r = xr.open_dataset(precompute_dir + '/Control/spectrum/B4904DCRr1.nc')
-    freqs = ds_b2.coords['freqs'].values[:60]
-    delta_power = np.concatenate((ds_b1['delta_power'].values,ds_b2['delta_power'].values,ds_sd['delta_power'].values,ds_r['delta_power'].values))
-    times = np.arange(delta_power.size)*4
-    step = .5
-    hours = np.arange(int(times.size*(1/step)*4/3600))
+def plot_spectrum_compare_day_night(spectrum_method = 'somno', period = 'light'):
+    control_list = get_mice('Control')
+    DCR_list = get_mice('DCR-HCRT')
+    groups = {'Control' : control_list, 'DCR-HCRT' : DCR_list}
+    ds = xr.open_dataset(precompute_dir + '/spectrums/spectrum_scoring_B2533.nc')
+    freqs = ds.coords['freqs_{}'.format(spectrum_method)].values.tolist()
+
+    indices = []
+    for state in ['w', 'n', 'r']:
+        for session in ['bl1', 'bl2', 'sd', 'r1' ]:
+            indices+=([i + '_'+session+ '_'+state for i in control_list+ DCR_list])
+    df_spectrum = pd.DataFrame(index = indices, columns = ['group', 'session', 'state', 'ref_values'] + freqs)
+
+
 
     for group in groups:
-        mice = get_mice_for_spectrum(group)
-        df_deltas = pd.DataFrame(np.zeros((len(mice), hours.size)),index = mice, columns = hours)
-        df_spectrums_a = pd.DataFrame(np.zeros((len(mice), freqs.size)),index = mice, columns = freqs)
-        df_spectrums_w = pd.DataFrame(np.zeros((len(mice), freqs.size)),index = mice, columns = freqs)
-        df_spectrums_n = pd.DataFrame(np.zeros((len(mice), freqs.size)),index = mice, columns = freqs)
-        df_spectrums_r = pd.DataFrame(np.zeros((len(mice), freqs.size)),index = mice, columns = freqs)
-        for mouse in mice :
-            if mouse == 'B3766' or mouse == 'B4112' or mouse == 'B4113':
+        for mouse in groups[group]:
+            ds = xr.open_dataset(precompute_dir + '/spectrums/spectrum_scoring_{}.nc'.format(mouse))
+            freqs = ds.coords['freqs_{}'.format(spectrum_method)].values
+            ZT = ds.coords['times_somno'].values
+            print('collecting relative spectrums ', mouse)
+
+            states = ['w', 'n', 'r']
+            conditions = ['bl1', 'bl2', 'sd', 'r1']
+
+            for condition in conditions:
+                ref_values, relative_spectrums = get_relative_spectrums_one_mouse_one_condition_day_night(mouse, condition, spectrum_method, period )
+                for state in states :
+                    df_spectrum.at['{}_{}_{}'.format(mouse,condition, state), 'state'] = state
+                    df_spectrum.at['{}_{}_{}'.format(mouse,condition, state), 'session'] = condition
+                    df_spectrum.at['{}_{}_{}'.format(mouse,condition, state), 'group'] = group
+                    df_spectrum.at['{}_{}_{}'.format(mouse,condition, state), 'ref_values'] = ref_values
+                    df_spectrum.at['{}_{}_{}'.format(mouse,condition, state), 4:] = relative_spectrums[state]
+
+        # df_spectrum = df_spectrum.dropna()
+    fig,ax = plt.subplots(nrows = 4, ncols= 3, sharex = True, sharey = True)
+    fig.suptitle('Spectrum per state -- ' + period)
+
+    fig_diff, ax_diff = plt.subplots(nrows = 4, ncols= 3, sharex = True, sharey = True)
+    fig_diff.suptitle('Diff DCR - ctrl')
+
+    for i in range(4):
+        ax[i,0].set_ylabel(conditions[i])
+        ax_diff[i,0].set_ylabel(conditions[i])
+
+    for row, session in enumerate(conditions):
+        for col, state in enumerate(states):
+            if state == 'a':
                 continue
-            # try :
-            if 1 :
-                ds_b1 = xr.open_dataset(precompute_dir + '/' + group +'/spectrum/' + mouse  + 'DCRb1.nc')
-                ds_b2 = xr.open_dataset(precompute_dir + '/' + group +'/spectrum/' + mouse + 'DCRb2.nc')
-                ds_sd = xr.open_dataset(precompute_dir + '/' + group +'/spectrum/' + mouse + 'DCRsd.nc')
-                ds_r = xr.open_dataset(precompute_dir + '/' + group +'/spectrum/' + mouse + 'DCRr1.nc')
-                score = np.concatenate((ds_b1['score'].values,ds_b2['score'].values,ds_sd['score'].values,ds_r['score'].values))
-                score_behavior = score.copy()
-                for f, n in zip(['1', '2', '3'], ['w', 'n', 'r']) :
-                    score_behavior = np.where(score_behavior == f, n, score_behavior)
+            # print(df_spectrum[(df_spectrum.session == session)& (df_spectrum.state == state)])
+            data_dcr = df_spectrum[(df_spectrum.session == session) & (df_spectrum.group == 'DCR-HCRT') & (df_spectrum.state == state)]
+            data_ctrl = df_spectrum[(df_spectrum.session == session) & (df_spectrum.group == 'Control') & (df_spectrum.state == state)]
+            data_dcr = data_dcr.dropna()
+            data_ctrl = data_ctrl.dropna()
+            data_dcr = (data_dcr[freqs]).values
+            data_ctrl = (data_ctrl[freqs]).values
+            # print()
+            # for i, maxi in enumerate(np.max(data_dcr, axis = 1)):
+            #     data_dcr[i] = data_dcr[i]/maxi
+            # for i, maxi in enumerate(np.max(data_ctrl, axis = 1)):
+            #     data_ctrl[i] = data_ctrl[i]/maxi
+            diff = np.mean(data_dcr, axis=0) - np.mean(data_ctrl, axis=0)
+            # ax[row, col].plot(data.T, color = 'black', alpha = .1)
+            # ax[row, col].plot(data.mean(axis = 0), color = 'red')
+            ax_diff[row, col].plot(freqs, diff )
+    for group in groups:
+        dirname = excel_dir + '/{}/power_spectrum/'.format(group)
+        if not os.path.exists(dirname):
+            os.makedirs(dirname)
 
-                freqs = ds_b1.coords['freqs'].values[:60]
-                t_start = ds_b1.coords['real_times'].values[0]
-                t_start = t_start.split('.')[0]
-                t_start = t_start.split(':')
-                t_start = float(t_start[0]) +float(t_start[1])/60 + float(t_start[2])/3600
+        for session in conditions:
+            for state in states:
+                name = 'spectrum_{}_{}_{}_{}.xlsx'.format(spectrum_method,state, session,period)
+                df = df_spectrum[(df_spectrum.group == group) & (df_spectrum.session == session) & (df_spectrum.state==state)]
+                df.to_excel(dirname+name)
+    for group in ['Control', 'DCR-HCRT']:
+        for row, session in enumerate(conditions):
+            for col, state in enumerate(states):
+                if group == 'Control' and state == 'a':
+                    continue
+                print(group, session, state)
+                data = df_spectrum[(df_spectrum.session == session) & (df_spectrum.group == group) & (df_spectrum.state == state)]
+                data = data.dropna()
+                data = (data[freqs]).values
+
+                print(data.shape)
+                plot = np.mean(data, axis=0)
+                # inf, med, sup = np.percentile(data, [25,50,75], axis=0)
+                # inf = np.array(inf, dtype = 'float64')
+                # sup = np.array(sup, dtype = 'float64')
+                # med = np.array(med, dtype = 'float64')
+
+                ax[row, col].plot(freqs,plot)
+
+                # ax[row, col].plot(freqs, med )
+                # ax[row, col].fill_between(x =freqs, y1 = inf, y2 = sup, alpha = .5 )
 
 
-                delta_power = np.concatenate((ds_b1['delta_power'].values,ds_b2['delta_power'].values,ds_sd['delta_power'].values,ds_r['delta_power'].values))
-                times = np.arange(delta_power.size)*4
-                states = ['w', 'n', 'r', 'a']
-                step = .5
-                hours = np.arange(int(times.size*(1/step)*4/3600))
-                delta_power_by_hour = np.zeros(hours.size)
-                std_delta_power_by_hour = delta_power_by_hour.copy()
-                for h in hours:
-                    if h <24 :
-                        delta_ref = np.mean(delta_power[int(8*3600):int(12*3600)])
-                    elif h >=24 and h<48 :
-                        delta_ref = np.mean(delta_power[int((8+24)*3600/4):int((12+24)*3600/4)])
-                    elif h >=48 and h<72 :
-                        delta_ref = np.mean(delta_power[int((8+48)*3600/4):int((12+48)*3600/4)])
-                    elif h >=72 :
-                        delta_ref = np.mean(delta_power[int((8+72)*3600/4):int((12+72)*3600/4)])
-
-                    subdata = delta_power[int(step*3600/4*h):int(step*3600/4*(h+1))]/delta_ref
-                    subscore =score[int(step*3600/4*h):int(step*3600/4*(h+1))]
-                    mask = (subscore != '1') & (subscore != '2') & (subscore != '3')
-                    m = np.mean(subdata[mask])
-                    std = np.std(subdata[mask])
-                    delta_power_by_hour[h] = m
-                    std_delta_power_by_hour[h] = std
-
-                df_deltas.loc[mouse] = delta_power_by_hour
-
-                spectrums = np.concatenate((ds_b1['spectrums'].values[:,:60],ds_b2['spectrums'].values[:,:60],ds_sd['spectrums'].values[:,:60],ds_r['spectrums'].values[:,:60]))
-
-                state_spectrum = spectrums[score == 'a']
-                m = state_spectrum.mean(axis=0)
-                df_spectrums_a.loc[mouse] = m
-                state_spectrum = spectrums[score == 'w']
-                m = state_spectrum.mean(axis=0)
-                df_spectrums_w.loc[mouse] = m
-                state_spectrum = spectrums[score == 'n']
-                m = state_spectrum.mean(axis=0)
-                df_spectrums_n.loc[mouse] = m
-                state_spectrum = spectrums[score == 'r']
-                m = state_spectrum.mean(axis=0)
-                df_spectrums_r.loc[mouse] = m
-        df_deltas.to_excel(precompute_dir + '/{}/Spectrum/delta_power.xlsx'.format(group))
-        df_spectrums_a.to_excel(precompute_dir + '/{}/Spectrum/spectrums_a.xlsx'.format(group))
-        df_spectrums_w.to_excel(precompute_dir + '/{}/Spectrum/spectrums_w.xlsx'.format(group))
-        df_spectrums_n.to_excel(precompute_dir + '/{}/Spectrum/spectrums_n.xlsx'.format(group))
-        df_spectrums_r.to_excel(precompute_dir + '/{}/Spectrum/spectrums_r.xlsx'.format(group))
-
-        ax_delta.plot(hours+t_start, df_deltas.mean(axis = 0), label = group)
-        ax_spec[0].plot(freqs, df_spectrums_w.mean(axis = 0), label = group)
-        ax_spec[1].plot(freqs, df_spectrums_n.mean(axis = 0), label = group)
-        ax_spec[2].plot(freqs, df_spectrums_r.mean(axis = 0), label = group)
-        ax_spec[3].plot(freqs, df_spectrums_a.mean(axis = 0), label = group)
-
-        ax_spec[0].set_ylabel('wake')
-        ax_spec[1].set_ylabel('nrem')
-        ax_spec[2].set_ylabel('rem')
-        ax_spec[3].set_ylabel('cata')
-
-    ax_spec[0].legend()
-    ax_spec[1].legend()
-    ax_spec[2].legend()
-    ax_spec[3].legend()
-
-    ax_delta.legend()
-    plt.show()
-            # except :
-            #     print('******** ERROR during precompute collecting ******* Mouse : ', mouse)
-    #
-    #
-    #
-    # fig,ax = plt.subplots(ncols= 4, sharex = True)
-    # for s, state in enumerate(states) :
-    #     state_spectrum = spectrums[score == state]
-    #     print(state_spectrum.shape)
-    #     m = state_spectrum.mean(axis=0)
-    #     std = state_spectrum.std(axis=0)
-    #     ax[s].plot(freqs,m, color = 'darkgreen')
-    #     ax[s].fill_between(freqs, m-std, m+std, color = 'darkgreen', alpha = .3)
-    #     lim = max(m+std)
-    #     # ax[0,s].set_ylim(0, lim*1.25)
-    #     # ax[1,s].set_ylim(0, lim*4)
-    #     ax[s].set_ylim(0, 30*10**-5)
-    #     ax[s].set_title(state)
-    #     fig.suptitle('Power spectrum by state -- ' + mouse)
+                # plt.show()
     # plt.show()
 
-# def plot_compare_spectrum(KO = 'Mir_137'):
-    # 1- get mean spectrums by mouse and  state
-        # control mice  = {
-                            # mice :{
-                                    # 'w': 0,
-                                    # 'r': 0,
-                                    # 'n': 0,
-                                    # 'a': 0
-                                    # }
-                        # }
-        # KO_mice...
-    # for mouse in controle mice :
-    #     ds = xr.open_dataset(local_path + '/precompute/' + file_name + '.nc')
-    #     score = ds['score'].values
-    #     freqs = ds.coords['freqs'].values[:60]
-    #     spectrums = ds['spectrums'].values[:,:60]
-        # for state in states :
-        # control_mice['mouse'] = np.mean(spectrums[score == state], axis = 0)
-    # 2 plot mean by group ie mean of means and DIFF
-    # fig, ax = plt.suplots(nrows =2, ncols = 4)
-    # KO,control = [],[]
-    # for s, state in enumerate(states) :
-    #     for mouse in mice
-    #         control.append(control_mice[mouse][state])
-    #
-    #     ax.plot[0, s].plot(freqs, np.mean(KO,  axis = 0), color = 'red')
-    #     ax.plot[0, s].fill_between(freqs, np.mean(KO,  axis = 0) + np.std(KO,   axis = 0), color = 'red', alpha = .5)
-    #     ax.plot[0, s].plot(freqs, np.mean(control, axis = 0), color = 'black')
-    #     ax.plot[0, s].plot(freqs, np.mean(control, axis = 0), color = 'black')
-    #     ax.plot[0, s].fill_between(freqs, + np.std(control, axis = 0), color = 'black', alpha = .5)
-    #     diff = np.mean(KO,  axis = 0) - np.mean(control, axis = 0)
-    #     ax.plot[1, s].plot(freqs, diff, color = 'black')
-    #     ax.plot[1, s].axhline(0, color = 'red')
-    #     t = .5
-    #     signif_mask = (diff < -t) | (diff > t)
-    #     ax.plot(freqs[signif_mask], diff[signif_mask], color = 'red')
+def plot_spectrum_cataplexy_day_night(spectrum_method = 'somno', period = 'light'):
+    DCR_list = get_mice('DCR-HCRT')
+    ds = xr.open_dataset(precompute_dir + '/spectrums/spectrum_scoring_B2533.nc')
+    freqs = ds.coords['freqs_{}'.format(spectrum_method)].values.tolist()
+
+    df_spectrum = pd.DataFrame(columns = ['session', 'ref_values'] + freqs)
 
 
+    for mouse in DCR_list:
+        ds = xr.open_dataset(precompute_dir + '/spectrums/spectrum_scoring_{}.nc'.format(mouse))
+        freqs = ds.coords['freqs_{}'.format(spectrum_method)].values
+        ZT = ds.coords['times_somno'].values
+        print('collecting relative spectrums ', mouse)
+        conditions = ['bl1', 'bl2', 'sd', 'r1']
+        for condition in conditions:
+            ref_values, relative_spectrums = get_relative_spectrums_one_mouse_one_condition_day_night(mouse, condition, spectrum_method, period )
+            df_spectrum.at['{}_{}'.format(mouse,condition), 'session'] = condition
+            df_spectrum.at['{}_{}'.format(mouse,condition), 'ref_values'] = ref_values
+            df_spectrum.at['{}_{}'.format(mouse,condition), 2:] = relative_spectrums['a']
+
+        # df_spectrum = df_spectrum.dropna()
+    fig,ax = plt.subplots(nrows = 4, sharex = True, sharey = True)
+    fig.suptitle('Spectrum per state -- ' + period)
+
+
+    for i in range(4):
+        ax[i].set_ylabel(conditions[i])
+
+    dirname = excel_dir + '/DCR-HCRT/power_spectrum/'.format(group)
+    if not os.path.exists(dirname):
+        os.makedirs(dirname)
+
+    for session in conditions:
+            name = 'spectrum_{}_a_{}_{}.xlsx'.format(spectrum_method, session,period)
+            df = df_spectrum[(df_spectrum.session == session)]
+            df.to_excel(dirname+name)
+
+    for row, session in enumerate(conditions):
+        data = df_spectrum[(df_spectrum.session == session)]
+        data = data.dropna()
+        data = (data[freqs]).values
+        plot = np.mean(data, axis=0)
+        ax[row].plot(freqs,plot)
+
+
+
+            # plt.show()
+    plt.show()
 
 if __name__ == '__main__':
-    mouse = 'B3512'
+    # mouse = 'B3512'
+    # mouse = 'B2534'
+    # mouse = 'B2533'
+    # mouse = 'B2767'
+    # mouse = 'B2761'
+    # mouse = 'B2700'
+    # mouse = 'B2762'
+    # mouse = 'B2763'
+    # mouse = 'B3072'
+    # mouse = 'B3140'
+    # mouse = 'B3513'
+    # mouse = 'B3512'
+    # mouse = 'B3766'
+    # mouse = 'B4112'
+    # mouse = 'B4113'
+    # mouse = 'B4975'
+    # mouse = 'B4976'
+    # mouse = 'B4907'
+
     group = 'DCR-HCRT'
-    rec = 'b1'
+    # rec = 'b1'
+
     # mouse = 'B4904'
+    # mouse  ='B2762'
+    # mouse  ='B2763'
+    # mouse  ='B3072'
+    # mouse  ='B3140'
+    # mouse  ='B3513'
+    # mouse = 'B4977'
+    mouse = 'B2767'
     # group = 'Control'
     # rec = 'b2'
     # compute_all()
-    hours = [11424/3600,12000/3600]
-    # compute_one_group(group)
-    # store_scoring_and_spectrums_one_mouse_one_session(group, mouse,rec)
-    # plot_spectrum_by_state_one_mouse_one_session(group, mouse, rec)
-    plot_anomalies(group, mouse, rec, hours)
-
-    # plot_spectrum_by_state_one_mouse(group, mouse)
-    # plot_compare_spectrum_DCR()
-    # plot_compare_spectrum(KO = 'Mir_137')
-    # plot_compare_spectrum(KO = 'Mir_665')
-    # plot_compare_spectrum(KO = 'Mir_128')
+    # plot_spectrum_compare_global(spectrum_method = 'somno')
+    plot_spectrum_compare_day_night(spectrum_method = 'welch', period = 'dark')
+    plot_spectrum_compare_day_night(spectrum_method = 'welch', period = 'light')
+    # store_scoring_and_spectrums_one_mouse_one_session_day_(group, mouse)
+    # get_clear_spectral_score_one_mouse_one_condition(mouse, 'bl1', 'r')
+    # get_relative_spectrums_one_mouse_one_condition(mouse, 'bl1')
+    # plot_spectrum_cataplexy_day_night(period ='light')
+    # get_clear_spectral_score_one_mouse_one_condition_day_night(mouse, 'bl1', 'r', 'dark')
+    # get_relative_spectrums_one_mouse_one_condition_day_night(mouse = mouse, condition ='bl1', spectrum_method = 'somno', period = 'dark')
+    plt.show()

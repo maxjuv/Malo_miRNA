@@ -170,8 +170,80 @@ def average_recovery_fragmentation():
                 df.loc[mouse, bouts] = weighted_mean
             df.to_excel(dirname+'/{}/{}_recovery_{}.xlsx'.format(state, state, period))
 
+
+
+def average_baseline_fragmentation_mean():
+    encoding_to_state = {'a':'cata', 'w':'wake', 'n':'nrem', 'r':'rem'}
+    for group in ['Control', 'DCR-HCRT']:
+        dirname = excel_dir + '{}/sleep_fragmentation_mean'.format(group)
+        if group == 'Control':
+            encoding = ['w', 'n', 'r']
+        elif group == 'DCR-HCRT':
+            encoding = ['w', 'n', 'r', 'a']
+        for e in encoding :
+            state = encoding_to_state[e]
+            period = 'light'
+            df1 = pd.read_excel(dirname+'/{}/{}_{}1.xlsx'.format(state, state, period), index_col =0)
+            df2 = pd.read_excel(dirname+'/{}/{}_{}2.xlsx'.format(state, state, period), index_col =0)
+            df = pd.DataFrame(index = df1.index, columns = df1.columns)
+            mouse = df1.index.to_list()
+            for mouse in mouse :
+                values1 = df1.loc[mouse, 'mean_duration']
+                values2 = df2.loc[mouse, 'mean_duration']
+                weighted_mean = (12/24)*values1 + (12/24)*values2
+                df.loc[mouse, 'mean_duration'] = weighted_mean
+            df.to_excel(dirname+'/{}/{}_baseline_{}.xlsx'.format(state, state, period))
+            period = 'dark'
+            df1 = pd.read_excel(dirname+'/{}/{}_{}1.xlsx'.format(state, state, period), index_col =0)
+            df2 = pd.read_excel(dirname+'/{}/{}_{}2.xlsx'.format(state, state, period), index_col =0)
+            df = pd.DataFrame(index = df1.index, columns = df1.columns)
+            mouse = df1.index.to_list()
+            for mouse in mouse :
+                values1 = df1.loc[mouse, 'mean_duration']
+                values2 = df2.loc[mouse, 'mean_duration']
+                weighted_mean = (12/24)*values1 + (12/24)*values2
+                df.loc[mouse, 'mean_duration'] = weighted_mean
+            df.to_excel(dirname+'/{}/{}_baseline_{}.xlsx'.format(state, state, period))
+
+def average_recovery_fragmentation_mean():
+    encoding_to_state = {'a':'cata', 'w':'wake', 'n':'nrem', 'r':'rem'}
+    for group in ['Control', 'DCR-HCRT']:
+        dirname = excel_dir + '{}/sleep_fragmentation_mean'.format(group)
+        if group == 'Control':
+            encoding = ['w', 'n', 'r']
+        elif group == 'DCR-HCRT':
+            encoding = ['w', 'n', 'r', 'a']
+        for e in encoding :
+            state = encoding_to_state[e]
+            period = 'light'
+            df1 = pd.read_excel(dirname+'/{}/{}_{}3.xlsx'.format(state, state, period), index_col =0)
+            df2 = pd.read_excel(dirname+'/{}/{}_{}4.xlsx'.format(state, state, period), index_col =0)
+            df = pd.DataFrame(index = df1.index, columns = df1.columns)
+            mouse = df1.index.to_list()
+            for mouse in mouse :
+                values1 = df1.loc[mouse, 'mean_duration']
+                values2 = df2.loc[mouse, 'mean_duration']
+                weighted_mean = (6/18)*values1 + (12/18)*values2
+                df.loc[mouse, 'mean_duration'] = weighted_mean
+            df.to_excel(dirname+'/{}/{}_recovery_{}.xlsx'.format(state, state, period))
+            period = 'dark'
+            df1 = pd.read_excel(dirname+'/{}/{}_{}3.xlsx'.format(state, state, period), index_col =0)
+            df2 = pd.read_excel(dirname+'/{}/{}_{}4.xlsx'.format(state, state, period), index_col =0)
+            df = pd.DataFrame(index = df1.index, columns = df1.columns)
+            mouse = df1.index.to_list()
+            for mouse in mouse :
+                values1 = df1.loc[mouse, 'mean_duration']
+                values2 = df2.loc[mouse, 'mean_duration']
+                weighted_mean = (12/24)*values1 + (12/24)*values2
+
+                df.loc[mouse, 'mean_duration'] = weighted_mean
+            df.to_excel(dirname+'/{}/{}_recovery_{}.xlsx'.format(state, state, period))
+
+
 if __name__ == '__main__':
-    average_baseline_spectrum()
-    average_recovery_spectrum()
-    average_baseline_fragmentation()
-    average_recovery_fragmentation()
+    # average_baseline_spectrum()
+    # average_recovery_spectrum()
+    # average_baseline_fragmentation()
+    # average_recovery_fragmentation()
+    average_baseline_fragmentation_mean()
+    average_recovery_fragmentation_mean()

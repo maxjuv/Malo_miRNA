@@ -702,8 +702,7 @@ def plot_spectrum_cataplexy_day_night(spectrum_method = 'somno', period = 'light
     ds = xr.open_dataset(precompute_dir + '/spectrums/spectrum_scoring_B2533.nc')
     freqs = ds.coords['freqs_{}'.format(spectrum_method)].values.tolist()
 
-    df_spectrum = pd.DataFrame(columns = ['session', 'ref_values'] + freqs)
-
+    df_spectrum = pd.DataFrame(columns = ['group','session','state', 'ref_values'] + freqs)
 
     for mouse in DCR_list:
         ds = xr.open_dataset(precompute_dir + '/spectrums/spectrum_scoring_{}.nc'.format(mouse))
@@ -713,9 +712,12 @@ def plot_spectrum_cataplexy_day_night(spectrum_method = 'somno', period = 'light
         conditions = ['bl1', 'bl2', 'sd', 'r1']
         for condition in conditions:
             ref_values, relative_spectrums = get_relative_spectrums_one_mouse_one_condition_day_night(mouse, condition, spectrum_method, period )
+            df_spectrum.at['{}_{}'.format(mouse,condition), 'group'] = group
             df_spectrum.at['{}_{}'.format(mouse,condition), 'session'] = condition
+            df_spectrum.at['{}_{}'.format(mouse,condition), 'state'] = 'a'
             df_spectrum.at['{}_{}'.format(mouse,condition), 'ref_values'] = ref_values
-            df_spectrum.at['{}_{}'.format(mouse,condition), 2:] = relative_spectrums['a']
+            df_spectrum.at['{}_{}'.format(mouse,condition), freqs] = relative_spectrums['a']
+
 
         # df_spectrum = df_spectrum.dropna()
     fig,ax = plt.subplots(nrows = 4, sharex = True, sharey = True)
@@ -781,12 +783,13 @@ if __name__ == '__main__':
     # rec = 'b2'
     # compute_all()
     # plot_spectrum_compare_global(spectrum_method = 'somno')
-    plot_spectrum_compare_day_night(spectrum_method = 'welch', period = 'dark')
-    plot_spectrum_compare_day_night(spectrum_method = 'welch', period = 'light')
+    # plot_spectrum_compare_day_night(spectrum_method = 'welch', period = 'dark')
+    # plot_spectrum_compare_day_night(spectrum_method = 'welch', period = 'light')
     # store_scoring_and_spectrums_one_mouse_one_session_day_(group, mouse)
     # get_clear_spectral_score_one_mouse_one_condition(mouse, 'bl1', 'r')
     # get_relative_spectrums_one_mouse_one_condition(mouse, 'bl1')
-    # plot_spectrum_cataplexy_day_night(period ='light')
+    plot_spectrum_cataplexy_day_night(period ='light')
+    plot_spectrum_cataplexy_day_night(period ='dark')
     # get_clear_spectral_score_one_mouse_one_condition_day_night(mouse, 'bl1', 'r', 'dark')
     # get_relative_spectrums_one_mouse_one_condition_day_night(mouse = mouse, condition ='bl1', spectrum_method = 'somno', period = 'dark')
     plt.show()

@@ -8,26 +8,9 @@ import pandas as pd
 import xarray as xr
 import matplotlib.pyplot as plt
 import seaborn as sns
-
 from select_mice_cata_Malo import get_mice
 
-# data_dir = 'C:/Users/maxime.juventin/Desktop/scripts_ML/data/'
-# data_dir = "/Volumes/FBM/DP/GROUPS/RESEARCH/MT/PRIVATE/common/Marie-Laure/DICER ANALYSIS/scripts_cataplexy"
-# precompute_dir = "/Volumes/FBM/DP/GROUPS/RESEARCH/MT/PRIVATE/common/Marie-Laure/DICER ANALYSIS/scripts_cataplexy/data/"
-# excel_dir = "/Volumes/FBM/DP/GROUPS/RESEARCH/MT/PRIVATE/common/Marie-Laure/DICER ANALYSIS/scripts_cataplexy/excels/"
-
-
-    #
-    # RNAs = os.listdir(data_dir)
-    # groups = ['control', 'hcrt_cre']
-    # print(RNAs, groups)
-    # for RNA in RNAs :
-    #     for group in groups :
-    #         print(RNA, group)
-    #         precompute_sleep_state_by_epoch(RNA, group)
-    #         sleep_state_statistics(RNA, group)
-    #         sleep_bouts(RNA, group)
-
+#
 def compute_all():
     groups = ['Control', 'DCR-HCRT']
     print(groups)
@@ -39,16 +22,9 @@ def compute_all():
 
 def precompute_sleep_state_by_epoch(group):
 
-    # files = get_mice(group)
     mice = get_mice(group)
-    # mice = np.unique([str(y.split('.')[0][:-2]) for y in files]).tolist()
     print(mice)
-    # days = np.unique([str(y.split('.')[0][-2:]) for y in files]).tolist()
-    # print(days)
     days = [ 'b1', 'b2', 'sd', 'r1' ]
-    # days = ['b0', 'b1', 'b2', 'sd']
-
-
 
     all_mice_all_days = {}
     numbers = ['1', '2', '3', '4' ,'5' ,'6']
@@ -59,10 +35,10 @@ def precompute_sleep_state_by_epoch(group):
             print(data_dir  + group+ "/" + mouse + 'DCR'+day + ".txt")
 
             data_per_day = np.loadtxt(data_dir  +"/Scoring/"+ group+ "/" + mouse + 'DCR'+day + ".txt", dtype = str)
-            # print(data_per_day.size)
             for number, letter in zip (numbers, letters):
                 data_per_day = np.where(data_per_day == number, letter, data_per_day)
             data.append(data_per_day)
+
 
         one_mouse = np.concatenate(data)
         # print(one_mouse.shape)
@@ -77,14 +53,7 @@ def precompute_sleep_state_by_epoch(group):
     all_mice_r_epoch = all_mice_all_days == 'r'
     all_mice_cata_epoch = all_mice_all_days == 'a'
 
-
-
-
-
     print('create Dataset')
-
-
-
     path = precompute_dir + '/' + group + '/'
     if not os.path.exists(path):
         os.makedirs(path)
@@ -330,7 +299,10 @@ def sleep_bouts(group):
     all_mice_n_epoch = ds['nrem_all_mice'].to_pandas()
     all_mice_cata_epoch = ds['cata_all_mice'].to_pandas()
     all_mice_r_epoch = ds['rem_all_mice'].to_pandas()    #.unstack().T*1
-    data_by_state = {'wake':all_mice_w_epoch, 'nrem' : all_mice_n_epoch, 'rem' :all_mice_r_epoch, 'cata':all_mice_cata_epoch}
+    data_by_state = {'wake':all_mice_w_epoch,
+                    'nrem' : all_mice_n_epoch,
+                    'rem' :all_mice_r_epoch,
+                    'cata':all_mice_cata_epoch}
     number_of_epochs = ds['wake_all_mice'].shape[0]
     # print(number_of_epochs)
     epoch_duration = 4
@@ -363,25 +335,9 @@ def sleep_bouts(group):
     # hours_in_epochs = hours*3600/epoch_duration
     # print(hours_in_epochs)
     mice = ds.coords['mice'].values
-    # fig, ax = plt.subplots()
 
-    # for mouse in mice :
-    #     # print(mouse)
-    #     plot = []
-    #     timing = []
-    #     for i in np.arange(0*window, number_of_epochs-window,window):
-    #         w_one_mouse = all_mice_w_epoch[mouse].values
-    #         plot.append(w_one_mouse[i:i+window].sum())
-    #         timing.append(i/window)
-    #     # ax.plot(timing, plot, label = mouse)
-
-
-
-    # fig, ax = plt.subplots(nrows = 3, ncols = 10)
     for s, state in enumerate(data_by_state):
         data = data_by_state[state]
-
-
         for c, cycle in enumerate(day_cycles):
             cycle_hours = day_cycles[cycle]
             # print(cycle_hours)
@@ -391,6 +347,7 @@ def sleep_bouts(group):
             selected_data = data[i1: i2]
             # print(diff.where(diff == -1))
             all_mice_count = {}
+            all_mice_mean_bout_duration = {}
             # print('je suis la')
             for mouse in mice :
                 one_and_zeros_one_mouse = selected_data[mouse].values
@@ -402,99 +359,31 @@ def sleep_bouts(group):
                         counter = 0
                     if i ==1:
                         counter +=1
-                bouts.append(counter)
+                #### True duration last bout unknown
+                # bouts.append(counter)
                 bouts=np.array(bouts)
                 mask = bouts!=0
                 bouts = bouts[mask]
-
-            # all_mice_count = {}
-            # for mouse in mice :
-            #     diff_one_mouse = diff[mouse].values
-            #     ini = np.where(diff_one_mouse  == 1)[0]
-            #     end = np.where(diff_one_mouse  == -1)[0]
-            #     bouts = []
-            #
-            #     # print(len(ini), len(end))
-            #     ######TODO iterate on data 1110000 and make count that starts when i==1
-            #     # print(ini[0] > end[0], ini[0] , end[0])
-            #     if len(ini) == 0 and len(end)==0 :
-            #         bouts.append(0)
-            #     elif len(ini) == 1 and len(end)==0 :
-            #         bouts.append(diff_one_mouse.size-ini[0])
-            #     elif len(ini) == 0 and len(end)==1 :
-            #         bouts.append(end[0])
-            #     elif len(ini) == 1 and len(end)==1 :
-            #         if ini[0]<end[0]:
-            #             bouts.append(end[0]-ini[0])
-            #         else:
-            #             bouts.append(end[0])
-            #             bouts.append(diff_one_mouse.size-ini[0])
-            #     # if 0 :
-            #
-            #     else :
-            #         print(data[i1: i2][mouse].values)
-            #         print(ini, end)
-            #         if ini[0] > end[0] :
-            #             first_bout = end[0]
-            #             bouts.append(first_bout)
-            #             end = np.delete(end, 0)
-            #             # print(first_bout, 'first')
-            #             # print(len(end))
-            #         if ini[-1] > end[-1] :
-            #             last_bout = diff_one_mouse.size - ini[-1]
-            #             bouts.append(last_bout)
-            #             ini = np.delete(ini, -1)
-            #             # print(last_bout, 'last')
-            #             # print(len(ini))
-            #
-            #         for i in np.arange(len(ini)):
-            #             bout = end[i]-ini[i]
-            #             bouts.append(bout)
-                    # print(bouts)
-                #one_mouse_bouts.append(bouts)
-                #all_mice_bouts = np.concatenate(all_mice_bouts)*4
                 bouts = bouts*4
+                mean_bouts = np.mean(bouts)
+                all_mice_mean_bout_duration[mouse] = mean_bouts
+
                 bins_sleep = [2**i for i in np.arange(2,12)]
                 #bins_sleep += [max(bouts)]
                 count, bins= np.histogram(bouts, bins = bins_sleep)
                 all_mice_count[mouse] = count
-                # fig, ax = plt.subplots()
-                # ax.bar(bins[:-1], count)
-                # fig.suptitle(state)
-                # print(bouts)
-                # print(sum(bouts>=1024), sum(bouts>=512))
-                # print(sum(bouts==4))
-                # plt.show()
-            # print(all_mice_count)
+
             df = pd.DataFrame.from_dict(all_mice_count, orient = 'index', columns = bins[:-1] )
             output_path = excel_dir + '/'+ group + '/sleep_fragmentation/' + state + '/'
             if not os.path.exists(output_path):
                 os.makedirs(output_path)
             df.to_excel(output_path + state + '_' + cycle + '.xlsx')
 
-
-            # if np.unique(all_mice_bouts).size > 1 :
-                # sns.distplot(all_mice_bouts, color = 'black', ax = ax[s,c])
-            # ax[s,c].hist(all_mice_bouts, 51, range = [0,50])
-
-            #
-            # fig, axx = plt.subplots(nrows=2)
-            # axx[0].bar(bins[:-1], count, width = 10)
-            # axx[1].bar(bins[:-1], count*bins[:-1], width = 10)
-            # axx[0].set_title(state +' - ' +cycle)
-            # plt.show()
-            # ax[s,c].bar(bins[:-1], count, width=1, color = 'black')
-            # #
-            # # ax[s,c].set_ylim(0, 30)
-            # ax[s,0].set_ylabel(state)
-            # ax[0,c].set_title(cycle)
-
-        # ax.legend()
-        # ax.set_xlim(0.5, 100)
-        # ax.set_ylim(0, 10)
-        # fig.suptitle('Wake bouts during ' + cycle)
-
-
+            df_mean_duration = pd.DataFrame.from_dict(all_mice_mean_bout_duration, orient = 'index', columns = ['mean_duration'] )
+            output_path = excel_dir + '/'+ group + '/sleep_fragmentation_mean/' + state + '/'
+            if not os.path.exists(output_path):
+                os.makedirs(output_path)
+            df_mean_duration.to_excel(output_path + state + '_' + cycle + '.xlsx')
 
 
 

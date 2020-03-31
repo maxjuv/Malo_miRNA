@@ -8,7 +8,119 @@ local_path = os.path.dirname(os.path.realpath(__file__))
 print(local_path)
 
 
-def plot_ratio_compare(spectrum_method = 'somno'):
+def get_delta_ref_one_mouse_from_spectrum(mouse, state, spectrum_method = 'somno'):
+    debug = 0
+    ds = xr.open_dataset(precompute_dir + '/spectrums/spectrum_scoring_{}.nc'.format(mouse))
+    times = ds.coords['times_somno'].values/3600
+    absolute_spectrum = ds['{}_spectrum'.format(spectrum_method)].values
+    freqs = ds.coords['freqs_{}'.format(spectrum_method)].values
+    df = (freqs[11]-freqs[1])/10
+    spectrum_ref = np.empty(freqs.size)
+    for bl in ['bl1', 'bl2']:
+        mydict = get_clean_score_one_condition(mouse, bl, state)
+        mask = mydict['condition_mask']
+        clean_score = mydict['clean_score']
+        times_bl = times[mask]-times[mask][0]
+        spectrum_last_light = absolute_spectrum[mask]
+        time_of_ref = (times_bl>=8) & (times_bl<=12)
+        score_ref = clean_score[time_of_ref]
+        spectrum_last_light = spectrum_last_light[time_of_ref][score_ref]
+        spectrum_ref = np.vstack((spectrum_ref, spectrum_last_light))
+
+    spectrum_ref = spectrum_ref[1:,:]
+    mask_delta = (freqs>=1) & (freqs<=4)
+    delta_ref = np.mean(spectrum_ref,axis = 0)
+    delta_ref = np.sum(delta_ref[mask_delta])*df
+    return delta_ref
+
+
+def get_delta_ratio_one_condition_from_spectrum(mouse, condition, state, spectrum_method = 'somno'):
+    debug = 0
+    print('get delta ratio for {} during {}'.format(mouse, condition))
+    ds = xr.open_dataset(precompute_dir + '/spectrums/spectrum_scoring_{}.nc'.format(mouse))
+    times = ds.coords['times_somno'].values/3600
+
+    mydict = get_clean_score_one_condition(mouse, condition, state)
+
+    mask = mydict['condition_mask']
+    mask_dark = mydict['mask_dark']
+    mask_light = mydict['mask_light']
+    clean_score = mydict['clean_score']
+
+    times = times[mask]-times[mask][0]
+    if condition == 'sd':
+        times+=6
+
+    absolute_spectrum = ds['{}_spectrum'.format(spectrum_method)].values
+    freqs = ds.coords['freqs_{}'.format(spectrum_method)].values
+    absolute_spectrum = absolute_spectrum[mask]
+    ref = get_delta_ref_one_mouse_from_spectrum(mouse, state)
+    # relative_spectrum = 100*absolute_spectrum/ref
+
+    # dark_intervals = 6
+    dark_intervals = 12
+
+    ZT = []
+    delta = []
+    mask_delta = (freqs>=1) & (freqs<=4)
+    df = (freqs[11]-freqs[1])/10
+
+    if condition == 'sd':
+        # light_intervals = 8
+        light_intervals = 16
+        light_intervals_borders = np.linspace(6,12,light_intervals+1)
+        for interval in np.arange(light_intervals):
+            ZT1 = light_intervals_borders[interval]
+            ZT2 = light_intervals_borders[interval+1]
+            interval_mask = (times>=ZT1) & (times<ZT2)
+            interval_score = clean_score[interval_mask]
+            interval_spectrum = absolute_spectrum[interval_mask]
+            interval_spectrum = interval_spectrum[interval_score]
+            interval_spectrum = np.mean(interval_spectrum, axis = 0)[mask_delta]
+            ZT.append((ZT2+ZT1)/2)
+            delta.append(100*np.sum(interval_spectrum)*df/ref)
+
+    else :
+        # light_intervals = 12
+        light_intervals = 24
+        light_intervals_borders = np.linspace(0,12,light_intervals+1)
+        for interval in np.arange(light_intervals):
+            ZT1 = light_intervals_borders[interval]
+            ZT2 = light_intervals_borders[interval+1]
+            interval_mask = (times>=ZT1) & (times<ZT2)
+            interval_score = clean_score[interval_mask]
+            interval_spectrum = absolute_spectrum[interval_mask]
+            interval_spectrum = interval_spectrum[interval_score]
+            interval_spectrum = np.mean(interval_spectrum, axis = 0)[mask_delta]
+            # fig, ax = plt.subplots()
+            # ax.plot(freqs, interval_spectrum)
+            # ax.set_xlim(0,6)
+            # plt.show()
+            ZT.append((ZT2+ZT1)/2)
+            delta.append(100*np.sum(interval_spectrum)*df/ref)
+
+    dark_intervals_borders = np.linspace(12,24,dark_intervals+1)
+    for interval in np.arange(dark_intervals):
+        ZT1 = dark_intervals_borders[interval]
+        ZT2 = dark_intervals_borders[interval+1]
+        interval_mask = (times>=ZT1) & (times<ZT2)
+        interval_score = clean_score[interval_mask]
+        interval_spectrum = absolute_spectrum[interval_mask]
+        interval_spectrum = interval_spectrum[interval_score]
+        interval_spectrum = np.mean(interval_spectrum, axis = 0)[mask_delta]
+        ZT.append((ZT2+ZT1)/2)
+        delta.append(100*np.sum(interval_spectrum)*df/ref)
+
+    if debug :
+        fig,ax = plt.subplots()
+        ax.scatter(ZT, delta)
+        ax.axhline(100, color = 'black', ls ='--' )
+        ax.plot(ZT, delta)
+        # plt.show()
+    return {'ZT':np.array(ZT), 'delta':np.array(delta) }
+
+
+# def plot_ratio_compare(spectrum_method = 'somno'):
     control_list = get_mice('Control')
     DCR_list = get_mice('DCR-HCRT')
     groups = {'Control' : control_list, 'DCR-HCRT' : DCR_list}
@@ -294,7 +406,7 @@ def get_clean_score_one_condition(mouse, condition, state):
 
 
 def get_delta_ref_one_mouse(mouse, state, spectrum_method = 'somno'):
-    debug = 1
+    debug = 0
     ds = xr.open_dataset(precompute_dir + '/spectrums/spectrum_scoring_{}.nc'.format(mouse))
     times = ds.coords['times_somno'].values/3600
     absolute_delta_power = ds['{}_delta_power'.format(spectrum_method)].values
@@ -309,7 +421,17 @@ def get_delta_ref_one_mouse(mouse, state, spectrum_method = 'somno'):
         score_ref = clean_score[time_of_ref]
         delta_ref = np.concatenate((delta_ref, absolute[time_of_ref]))
 
+        # fig, ax = plt.subplots(nrows=2, sharex =True)
+        # ax[0].plot(times_bl,absolute)
+        # ax[0].plot(times_bl[time_of_ref],absolute[time_of_ref], color ='green')
+        # ax[0].plot(times_bl[time_of_ref][clean_score[time_of_ref]],absolute[time_of_ref][clean_score[time_of_ref]], color ='red')
+        # ax[1].plot(times_bl,clean_score)
+        # plt.show()
     ref = np.mean(delta_ref)
+    # fig,ax = plt.subplots()
+    # ax.plot(times_bl,100*absolute/ref)
+    # plt.show()
+
 
     return ref
 
@@ -336,13 +458,15 @@ def get_delta_ratio_one_condition(mouse, condition, state, spectrum_method = 'so
     ref = get_delta_ref_one_mouse(mouse, state)
     relative_delta_power = 100*absolute_delta_power/ref
 
-    dark_intervals = 6
+    # dark_intervals = 6
+    dark_intervals = 12
 
     ZT = []
     delta = []
 
     if condition == 'sd':
-        light_intervals = 8
+        # light_intervals = 8
+        light_intervals = 16
         light_intervals_borders = np.linspace(6,12,light_intervals+1)
         for interval in np.arange(light_intervals):
             ZT1 = light_intervals_borders[interval]
@@ -355,7 +479,8 @@ def get_delta_ratio_one_condition(mouse, condition, state, spectrum_method = 'so
             delta.append(np.mean(sliding_delta))
 
     else :
-        light_intervals = 12
+        # light_intervals = 12
+        light_intervals = 24
         light_intervals_borders = np.linspace(0,12,light_intervals+1)
         for interval in np.arange(light_intervals):
             ZT1 = light_intervals_borders[interval]
@@ -381,6 +506,7 @@ def get_delta_ratio_one_condition(mouse, condition, state, spectrum_method = 'so
     if debug :
         fig,ax = plt.subplots()
         ax.scatter(ZT, delta)
+        ax.axhline(100, color = 'black', ls ='--' )
         ax.plot(ZT, delta)
         # plt.show()
 
@@ -390,7 +516,8 @@ def get_time_course():
     mouse = 'B4977'
     time_course = []
     for i, session in enumerate(['bl1', 'bl2', 'sd', 'r1' ]):
-        dict = get_delta_ratio_one_condition(mouse, session, 'n')
+        # dict = get_delta_ratio_one_condition(mouse, session, 'n')
+        dict = get_delta_ratio_one_condition_from_spectrum(mouse, session, 'n')
         ZT = (dict['ZT']+i*24).tolist()
         time_course += ZT
 
@@ -405,13 +532,15 @@ def plot_compare_ratio(state, spectrum_method = 'somno'):
     time_course = get_time_course()
     indices = []
     df_ratio = pd.DataFrame(index = control_list+DCR_list, columns = ['group'] + time_course )
+
     for group in groups:
         for mouse in groups[group]:
             print(mouse)
             df_ratio.loc[mouse, 'group'] = group
             delta = np.array([])
             for i, session in enumerate(['bl1', 'bl2', 'sd', 'r1' ]):
-                dict = get_delta_ratio_one_condition(mouse, session, state)
+                # dict = get_delta_ratio_one_condition(mouse, session, state)
+                dict = get_delta_ratio_one_condition_from_spectrum(mouse, session, state)
                 delta = np.append(delta, dict['delta'])
             df_ratio.loc[mouse, time_course] = delta
     for group in groups :
@@ -436,7 +565,7 @@ def plot_compare_ratio(state, spectrum_method = 'somno'):
             # ax.fill_between(time_course, inf, sup, alpha = .2)
             #
             ax.plot(time_course, np.nanmean(subdata, axis = 0), label = group)
-            ax.plot(time_course, subdata.T, color = 'black', alpha = .1)
+            # ax.plot(time_course, subdata.T, color = 'black', alpha = .1)
 
             # ax.scatter(time_course, np.nanmean(subdata, axis = 0))
         ax.legend()
@@ -503,19 +632,23 @@ if __name__ == '__main__':
 
     # mouse = 'B4904'
     # mouse  ='B2762'
-    # mouse  ='B2763'
+    mouse  ='B2763'
     # mouse  ='B3072'
     # mouse  ='B3140'
-    mouse  ='B3513'
+    # mouse  ='B3513'
     # mouse = 'B4977'
     # mouse = 'B2767'
     # group = 'Control'
     # rec = 'b2'
     # get_event_number_day_light('n')
     # get_delta_ref_one_mouse(mouse, 'n')
-    get_delta_ratio_one_condition(mouse, condition = 'bl1', state = 'n')
-    get_delta_ratio_one_condition(mouse, condition = 'bl2', state = 'n')
+    # get_delta_ratio_one_condition(mouse, condition = 'bl1', state = 'n')
+    # get_delta_ratio_one_condition(mouse, condition = 'bl2', state = 'n')
     # get_time_course()
-    # plot_compare_ratio('n')
+    plot_compare_ratio('n')
     # plot_compare_ratio('w')
+
+    # get_delta_ref_one_mouse_from_spectrum(mouse, 'n')
+    # get_delta_ratio_one_condition_from_spectrum(mouse, condition = 'bl1', state = 'n')
+    # get_delta_ratio_one_condition_from_spectrum(mouse, condition = 'bl2', state = 'n')
     plt.show()

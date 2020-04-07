@@ -1,7 +1,9 @@
 # !/Users/maximejuventin/anaconda3/bin/python
 
 from configuration import *
-
+from select_mice_cata_Malo import get_mice
+import multiprocessing
+from joblib import Parallel, delayed
 import pyedflib
 
 
@@ -29,13 +31,15 @@ def edf_to_dataset(mouse):
         print('EDF : {} vs. Excel : {}'.format(channel_labels[0],true_EEG))
         exit()
     channel_num = 0
-    sr = f.getSampleFrequency(channel_num)
-    print('real sr = {:.5f}'.format(f.getNSamples()[0]/f.getFileDuration()))
-    sr = f.getNSamples()[0]/f.getFileDuration()
+    # sr = f.getSampleFrequency(channel_num)
+    # print('real sr = {:.5f}'.format(f.getNSamples()[0]/f.getFileDuration()))
+    # sr = f.getNSamples()[0]/f.getFileDuration()
     # print(sr)
     # print(f.getSampleFrequencies())
     # print(np.float(f.samplefrequency(channel_num)))
-    sr = 199.985
+    # sr = 199.985
+    sr = date_ref.at['MTA-{}'.format(mouse), 'sampling_rate']
+
     # exit()
     # sr = f.samplefrequency(channel_num)
     # DO NOT USE f.samplefrequency(channel_num))
@@ -93,11 +97,19 @@ def read_data_one_mouse(mouse):
     print(ds['signal'].values)
 
 def get_all_raw_data():
-    date_ref = pd.read_excel(work_dir + 'datetime_reference_DICER.xls', index_col = 0)
-    mice = date_ref.index.to_list()
-    for mouse in mice:
-        mouse = mouse[4:]
-        edf_to_dataset(mouse)
+    dcr_mice = get_mice(group = 'DCR-HCRT')
+    control_mice = get_mice(group = 'Control')
+    animals_by_group = {'DCR-HCRT' : dcr_mice, 'Control' : control_mice}
+    # date_ref = pd.read_excel(work_dir + 'datetime_reference_DICER.xls', index_col = 0)
+    # mice = date_ref.index.to_list()
+    # for mouse in mice:
+    #     mouse = mouse[4:]
+    #     edf_to_dataset(mouse)
+    for group in animals_by_group :
+        mice = animals_by_group[group]
+        for mouse in mice :
+            edf_to_dataset(mouse)
+    #     results = Parallel(n_jobs=2)(delayed(edf_to_dataset)(mouse) for mouse in mice)
 
 def hack_dask():
     run_key = sys.argv[1]

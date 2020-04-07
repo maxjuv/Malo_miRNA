@@ -22,9 +22,9 @@ def vectorial_power_spectrum(mouse):
 
     point_per_epochs = int(4*sr)#800    ##### 4 sec at about 200 HZ   199,6
 
-    ###### highpass filter 0.3 Hz
+    ###### highpass filter 0.5 Hz
     N =3
-    f_cut = .3
+    f_cut = .5
     nyq = sr/2
     W = f_cut/nyq
     b, a = scipy.signal.butter(N, W, btype = 'highpass', output = 'ba')
@@ -178,10 +178,10 @@ def store_scoring_and_spectrums_one_mouse_one_session(group, mouse):
     all_score[one_day:int(one_day*2)] = score_b2
     all_score[int(2*one_day):int(3*one_day)] = score_sd
     all_score[int(3*one_day):int(4*one_day)] = score_r1
-    file_b1 = open('/Users/maximejuventin/Desktop/power_spectrum_somnologica/Power_spectrum/{}/MTA-{}/{}DCRb1s.txt'.format(group, mouse, mouse))
-    file_b2 = open('/Users/maximejuventin/Desktop/power_spectrum_somnologica/Power_spectrum/{}/MTA-{}/{}DCRb2s.txt'.format(group, mouse, mouse))
-    file_sd = open('/Users/maximejuventin/Desktop/power_spectrum_somnologica/Power_spectrum/{}/MTA-{}/{}DCRsds.txt'.format(group, mouse, mouse))
-    file_r1 = open('/Users/maximejuventin/Desktop/power_spectrum_somnologica/Power_spectrum/{}/MTA-{}/{}DCRr1s.txt'.format(group, mouse, mouse))
+    file_b1 = open(data_dir + '/Power_spectrum/{}/MTA-{}/{}DCRb1s.txt'.format(group, mouse, mouse))
+    file_b2 = open(data_dir + '/Power_spectrum/{}/MTA-{}/{}DCRb2s.txt'.format(group, mouse, mouse))
+    file_sd = open(data_dir + '/Power_spectrum/{}/MTA-{}/{}DCRsds.txt'.format(group, mouse, mouse))
+    file_r1 = open(data_dir + '/Power_spectrum/{}/MTA-{}/{}DCRr1s.txt'.format(group, mouse, mouse))
     # file_r1 = open(data_spectrum_dir + '/{}/MTA-{}/{}DCRr1s.txt'.format(group, mouse, mouse))
     real_time_lines = []
     data_lines = []

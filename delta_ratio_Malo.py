@@ -4,19 +4,29 @@ import multiprocessing
 from joblib import Parallel, delayed
 from sklearn.metrics import auc
 import scipy.signal
+import scipy.stats
 
 local_path = os.path.dirname(os.path.realpath(__file__))
 print(local_path)
 
-def test_percentile(state = 'n', spectrum_method = 'somno'):
-    fig, ax = plt.subplots()
-    fig.suptitle(spectrum_method)
+def wake_bandwidth_power_percentile(bandwidth = [6,9],group ='Control', spectrum_method = 'somno'):
+    debug =0
+    state = 'w'
+    if not debug:
+        dirname = excel_dir + '{}/EEG_power_time_course/{}/{}hz_to_{}hz_power/'.format(group, state,  bandwidth[0], bandwidth[1])
+        if not os.path.exists(dirname):
+            os.makedirs(dirname)
+    if debug:
+        fig, ax = plt.subplots()
+        fig.suptitle(spectrum_method)
     high = 1
     final_ZT = np.array([])
     final_delta = np.array([])
     n_loop = 0
-    for mouse in get_mice('Control'):
-    # for mouse in get_mice('DCR-HCRT'):
+    mice = get_mice(group)
+    df_power = pd.DataFrame(index = mice, columns = np.arange(72))
+    df_times = pd.DataFrame(index = mice, columns = np.arange(72))
+    for mouse in mice:
         print(mouse)
         if mouse == 'B2767':
             continue
@@ -27,7 +37,214 @@ def test_percentile(state = 'n', spectrum_method = 'somno'):
         score = ds['score'].values
         times = ds.coords['times_somno'].values/3600
         freqs = ds.coords['freqs_{}'.format(spectrum_method)].values
-        mask_delta = (freqs>.75) & (freqs<4)
+        mask_bandwidth = (freqs>bandwidth[0]) & (freqs<bandwidth[1])
+        df = (freqs[11]-freqs[1])/10
+        spectrum = ds['{}_spectrum'.format(spectrum_method)].values
+        score_no_artifact = score == state
+        score_no_transition = score_no_artifact.copy()
+        count = 0
+        event_length = []
+        for num, value in enumerate(score_no_artifact) :
+            if value:
+                count +=1
+            elif value == False:
+                event_length.append(count)
+                if count == 1 :
+                    score_no_transition[num-1] = False
+                elif count == 2 :
+                    score_no_transition[num-1] = False
+                    score_no_transition[num-2] = False
+                    count = 0
+                elif count > 2 :
+                    score_no_transition[num-1] = False
+                    score_no_transition[num-count] = False
+                count = 0
+        if count == 1 :
+            score_no_transition[num-1] = False
+        elif count == 2 :
+            score_no_transition[num-1] = False
+            score_no_transition[num-2] = False
+            count = 0
+        elif count > 2 :
+            score_no_transition[num-1] = False
+            score_no_transition[num-count] = False
+
+        mask_ref = ((times>8) & (times<12)) | ((times>32) & (times<36))
+        score_ref = score_no_transition[mask_ref]
+        spec_ref = spectrum[mask_ref]
+        ref = np.sum(np.median(spec_ref[score_ref], axis = 0)[mask_bandwidth])*df
+
+
+        time_score = times[score_no_transition]
+        percentile = []
+
+        mask = (time_score<12)
+        p = np.linspace(0,100,12+1)
+        percentile.append(np.percentile(time_score[mask], p))
+        mask = (time_score>12)&(time_score<24)
+        p = np.linspace(0,100,6+1)
+        percentile.append(np.percentile(time_score[mask], p))
+        mask = (time_score>24)&(time_score<36)
+        p = np.linspace(0,100,12+1)
+        percentile.append(np.percentile(time_score[mask], p))
+        mask = (time_score>36)&(time_score<48)
+        p = np.linspace(0,100,6+1)
+        percentile.append(np.percentile(time_score[mask], p))
+        mask = (time_score>48)&(time_score<60)
+        p = np.linspace(0,100,12+1)
+        percentile.append(np.percentile(time_score[mask], p))
+        mask = (time_score>60)&(time_score<72)
+        p = np.linspace(0,100,6+1)
+        percentile.append(np.percentile(time_score[mask], p))
+        mask = (time_score>72)&(time_score<84)
+        p = np.linspace(0,100,12+1)
+        percentile.append(np.percentile(time_score[mask], p))
+        mask = (time_score>84)&(time_score<96)
+        p = np.linspace(0,100,6+1)
+        percentile.append(np.percentile(time_score[mask], p))
+
+        percentile = np.concatenate(percentile)
+        absolute_delta = []
+        ZT = []
+        exceptions = [12, 19, 32, 39, 52, 59, 72]
+        for i in range(percentile.size-1):
+            if i in exceptions :
+                continue
+            else :
+                t1, t2 = percentile[i], percentile[i+1]
+                mask = (times>t1) & (times<t2)
+                interval_score =score_no_transition[mask]
+                interval_spectrum = spectrum[mask]
+                # print('         ', interval_spectrum[interval_score].shape[0])
+                mean_spec = np.median(interval_spectrum[interval_score], axis = 0)
+                if i == 0:
+                    MM = mean_spec
+                else :
+                    MM = np.vstack((MM, mean_spec))
+                absolute_delta.append(np.sum(mean_spec[mask_bandwidth])*df)
+                ZT.append((t1+t2)/2)
+        ZT = np.array(ZT)
+        absolute_delta = np.array(absolute_delta)
+        relative_delta = 100*absolute_delta/ref
+        df_power.loc[mouse, :] = relative_delta
+        df_times.loc[mouse, :] = ZT
+
+        final_ZT = np.append(final_ZT, ZT)
+        final_delta = np.append(final_delta, relative_delta)
+
+        if debug:
+            # ax.plot(ZT, relative_delta, label =mouse)
+            ax.plot(ZT, relative_delta, color = 'black', alpha = .1)
+
+    points = int(final_ZT.size/n_loop)
+    final_ZT = final_ZT.reshape(n_loop, points)
+    final_delta = final_delta.reshape(n_loop, points)
+    # print(df_power)
+    # print(df_times)
+
+    # final_ZT = np.median(final_ZT, axis = 0)
+    # final_delta = np.median(final_delta, axis = 0)
+    if not debug:
+        df_power.to_excel(dirname + '{}_{}hz_to_{}hz_EEG_power_{}.xlsx'.format(group, bandwidth[0], bandwidth[1], spectrum_method))
+        df_times.to_excel(dirname + '{}_{}hz_to_{}hz_times_{}.xlsx'.format(group, bandwidth[0], bandwidth[1], spectrum_method))
+    if debug:
+        ax.plot(final_ZT, final_delta)
+        ax.legend()
+        # plt.show()
+    return final_ZT, final_delta
+
+def plot_compare_wake(bandwidth = [5,10], spectrum_method = 'somno', agg_type='median'):
+    state = 'w'
+    fig, ax = plt.subplots(figsize = (20,20))
+    group_color = {'Control':'black', 'DCR-HCRT':'seagreen'}
+    style = {'Control' : 'o', 'DCR-HCRT':'square'}
+    stat = []
+    time = []
+    for group in ['Control', 'DCR-HCRT']:
+        final_ZT, final_delta = wake_bandwidth_power_percentile(bandwidth = bandwidth,group =group, spectrum_method = spectrum_method)
+        stat.append(final_delta)
+        if agg_type == 'median':
+            mad = scipy.stats.median_absolute_deviation(final_delta, axis=0)
+            final_ZT = np.median(final_ZT, axis = 0)
+            final_delta = np.median(final_delta, axis = 0)
+            ax.errorbar(final_ZT, final_delta, yerr=mad, color = group_color[group])
+
+            # time.append(final_ZT)
+        elif agg_type == 'mean':
+            sem = scipy.stats.sem(final_delta, axis=0)
+            final_ZT = np.mean(final_ZT, axis = 0)
+            final_delta = np.mean(final_delta, axis = 0)
+            ax.errorbar(final_ZT, final_delta, yerr=sem, color = group_color[group])
+
+        time.append(final_ZT)
+        # ax.plot(final_ZT, final_delta,label = group)
+        ax.plot(final_ZT, final_delta, color = group_color[group], lw = 1)
+        # ax.errorbar(final_ZT, final_delta, yerr=mad, color = group_color[group])
+        ax.scatter(final_ZT, final_delta, color = group_color[group], edgecolor = 'black', label = group)
+    stars = []
+    time_course = np.median(np.array(time), axis = 0)
+    ymin, _ = ax.get_ylim()
+    for i in range(final_delta.size):
+        if agg_type == 'median':
+            test = 'kruskal'
+            statitci, pvalue = scipy.stats.kruskal(stat[0][:,i], stat[1][:,i])
+
+        elif agg_type == 'mean':
+            test = 'f_oneway'
+            statistic, pvalue = scipy.stats.f_oneway(stat[0][:,i], stat[1][:,i])
+        print(pvalue)
+
+        if pvalue < .05:
+            ax.text(time_course[i], 1.05*ymin, '*')
+        elif pvalue < .01:
+            ax.text(time_course[i], 1.05*ymin, '*\n*')
+        # elif pvalue < .1:
+        #     ax.text(time_course[i], 80, 'a')
+    fig.suptitle('bandwidth = {}, state = {}, spectrum = {}, agg = {}'.format(bandwidth, state, spectrum_method, agg_type))
+    ax.legend()
+    # plt.show()
+    # exit()
+    # fig.suptitle('w {} {}hz to {}hz power'.format(spectrum_method, bandwidth[0], bandwidth[1]))
+    dirname = excel_dir + 'Control/EEG_power_time_course/w/'
+    if not os.path.exists(dirname):
+        os.makedirs(dirname)
+    fig.savefig(dirname + 'w_{}_{}hz_to_{}hz_power_{}.png'.format(spectrum_method, bandwidth[0], bandwidth[1], agg_type))
+    dirname = excel_dir + 'DCR-HCRT/EEG_power_time_course/w/'
+    if not os.path.exists(dirname):
+        os.makedirs(dirname)
+    fig.savefig(dirname + 'w_{}_{}hz_to_{}hz_power_{}.png'.format(spectrum_method, bandwidth[0], bandwidth[1], agg_type))
+    # plt.show()
+
+
+def sleep_bandwidth_power_percentile(bandwidth = [.75,4], group ='Control', state = 'n', spectrum_method = 'somno'):
+    debug =0
+    # state = 'n'
+    if debug:
+        fig, ax = plt.subplots()
+        fig.suptitle(spectrum_method)
+    if not debug:
+        dirname = excel_dir + '{}/EEG_power_time_course/{}/{}hz_to_{}hz_power/'.format(group, state,  bandwidth[0], bandwidth[1])
+        if not os.path.exists(dirname):
+            os.makedirs(dirname)
+    high = 1
+    final_ZT = np.array([])
+    final_delta = np.array([])
+    n_loop = 0
+    mice = get_mice(group)
+    df_power = pd.DataFrame(index = mice, columns = np.arange(68))
+    df_times = pd.DataFrame(index = mice, columns = np.arange(68))
+    for mouse in mice:
+        print(mouse)
+        if mouse == 'B2767':
+            continue
+        # if mouse != 'B4977':
+        #     continue
+        n_loop +=1
+        ds = xr.open_dataset(precompute_dir + '/spectrums/spectrum_scoring_{}.nc'.format(mouse))
+        score = ds['score'].values
+        times = ds.coords['times_somno'].values/3600
+        freqs = ds.coords['freqs_{}'.format(spectrum_method)].values
+        mask_delta = (freqs>bandwidth[0]) & (freqs<bandwidth[1])
         df = (freqs[11]-freqs[1])/10
         spectrum = ds['{}_spectrum'.format(spectrum_method)].values
         score_no_artifact = score == state
@@ -104,51 +321,104 @@ def test_percentile(state = 'n', spectrum_method = 'somno'):
                 t1, t2 = percentile[i], percentile[i+1]
                 mask = (times>t1) & (times<t2)
                 interval_score =score_no_transition[mask]
-                # if np.sum(interval_score) == 0 :
-                #     continue
-                # # else :
-                # if 1:
                 interval_spectrum = spectrum[mask]
-                # print('         ', interval_spectrum[interval_score].shape[0])
-                # print((t1+t2)/2)
-
                 mean_spec = np.median(interval_spectrum[interval_score], axis = 0)
                 if i == 0:
                     MM = mean_spec
                 else :
                     MM = np.vstack((MM, mean_spec))
-                # print(MM.shape)
-                # if MM.shape[0]<40:
-                    # continue
-                # fig2, ax2 = plt.subplots()
-                # ax2.plot(freqs,interval_spectrum[interval_score].T,  color = 'black', alpha = .05)
-                # print(t1,t2)
-                # fig1, ax1 = plt.subplots()
-                # ax1.plot(freqs,MM.T)
-                # plt.show()
                 absolute_delta.append(np.sum(mean_spec[mask_delta])*df)
                 ZT.append((t1+t2)/2)
         ZT = np.array(ZT)
         absolute_delta = np.array(absolute_delta)
         relative_delta = 100*absolute_delta/ref
-
+        df_power.loc[mouse, :] = relative_delta
+        df_times.loc[mouse, :] = ZT
         final_ZT = np.append(final_ZT, ZT)
         final_delta = np.append(final_delta, relative_delta)
 
+        if debug:
         # ax.plot(ZT, relative_delta, label =mouse)
-        ax.plot(ZT, relative_delta, color = 'black', alpha = .1)
+            ax.plot(ZT, relative_delta, color = 'black', alpha = .1)
 
     points = int(final_ZT.size/n_loop)
     final_ZT = final_ZT.reshape(n_loop, points)
     final_delta = final_delta.reshape(n_loop, points)
 
-    final_ZT = np.median(final_ZT, axis = 0)
-    final_delta = np.median(final_delta, axis = 0)
+    # final_ZT = np.median(final_ZT, axis = 0)
+    # final_delta = np.median(final_delta, axis = 0)
 
-    ax.plot(final_ZT, final_delta)
+    if not debug:
+        df_power.to_excel(dirname + '{}_{}hz_to_{}hz_EEG_power_{}.xlsx'.format(group, bandwidth[0], bandwidth[1], spectrum_method))
+        df_times.to_excel(dirname + '{}_{}hz_to_{}hz_times_{}.xlsx'.format(group, bandwidth[0], bandwidth[1], spectrum_method))
+
+    if debug:
+        ax.plot(final_ZT, final_delta)
+        ax.legend()
+        plt.show()
+    return  final_ZT, final_delta
+def plot_compare_sleep(bandwidth = [.75, 4], state = 'n', spectrum_method = 'somno', agg_type='median'):
+    fig, ax = plt.subplots(figsize = (20,20))
+    group_color = {'Control':'black', 'DCR-HCRT':'seagreen'}
+    style = {'Control' : 'o', 'DCR-HCRT':'square'}
+    stat = []
+    time = []
+    for group in ['Control', 'DCR-HCRT']:
+        final_ZT, final_delta = sleep_bandwidth_power_percentile(bandwidth = bandwidth,group =group, state = state, spectrum_method = spectrum_method)
+        stat.append(final_delta)
+        if agg_type == 'median':
+            mad = scipy.stats.median_absolute_deviation(final_delta, axis=0)
+            final_ZT = np.median(final_ZT, axis = 0)
+            final_delta = np.median(final_delta, axis = 0)
+            ax.errorbar(final_ZT, final_delta, yerr=mad, color = group_color[group])
+
+            # time.append(final_ZT)
+        elif agg_type == 'mean':
+            sem = scipy.stats.sem(final_delta, axis=0)
+            final_ZT = np.mean(final_ZT, axis = 0)
+            final_delta = np.mean(final_delta, axis = 0)
+            ax.errorbar(final_ZT, final_delta, yerr=sem, color = group_color[group])
+
+        time.append(final_ZT)
+        # ax.plot(final_ZT, final_delta,label = group)
+        ax.plot(final_ZT, final_delta, color = group_color[group], lw = 1)
+        # ax.errorbar(final_ZT, final_delta, yerr=mad, color = group_color[group])
+        ax.scatter(final_ZT, final_delta, color = group_color[group], edgecolor = 'black', label = group)
+    stars = []
+    time_course = np.median(np.array(time), axis = 0)
+    ymin, _ = ax.get_ylim()
+    print(stat[0].shape, stat[1].shape)
+    for i in range(final_delta.size):
+        if agg_type == 'median':
+            test = 'kruskal'
+            statitci, pvalue = scipy.stats.kruskal(stat[0][:,i], stat[1][:,i])
+
+        elif agg_type == 'mean':
+            test = 'f_oneway'
+            statistic, pvalue = scipy.stats.f_oneway(stat[0][:,i], stat[1][:,i])
+        print(pvalue)
+
+        if pvalue < .05:
+            ax.text(time_course[i], 1.05*ymin, '*')
+        elif pvalue < .01:
+            ax.text(time_course[i], 1.05*ymin, '*\n*')
+        # elif pvalue < .1:
+        #     ax.text(time_course[i], 80, 'a')
+    fig.suptitle('bandwidth = {}, state = {}, spectrum = {}, agg = {}'.format(bandwidth, state, spectrum_method, agg_type))
     ax.legend()
-    plt.show()
-    exit()
+    # plt.show()
+    # exit()
+    # fig.suptitle('{} {} {}hz to {}hz power'.format(state, spectrum_method, bandwidth[0], bandwidth[1]), agg_type)
+    dirname = excel_dir + 'Control/EEG_power_time_course/{}/'.format(state)
+    if not os.path.exists(dirname):
+        os.makedirs(dirname)
+    fig.savefig(dirname + '{}_{}_{}hz_to_{}hz_power_{}.png'.format(state, spectrum_method, bandwidth[0], bandwidth[1], agg_type))
+    dirname = excel_dir + 'DCR-HCRT/EEG_power_time_course/{}/'.format(state)
+    if not os.path.exists(dirname):
+        os.makedirs(dirname)
+    fig.savefig(dirname + '{}_{}_{}hz_to_{}hz_power_{}.png'.format(state, spectrum_method, bandwidth[0], bandwidth[1], agg_type))
+    # plt.show()
+
 
 def get_delta_ref_one_mouse_from_spectrum(mouse, state, spectrum_method = 'somno'):
     debug = 0
@@ -845,5 +1115,12 @@ if __name__ == '__main__':
     # get_delta_ratio_one_condition_from_spectrum(mouse, condition = 'sd', state = 'n')
     # get_delta_ratio_one_condition_from_spectrum(mouse, condition = 'r1', state = 'n')
     # plot_delta_by_mouse()
-    test_percentile(state = 'w', spectrum_method = 'welch')
+    # delta_power_percentile(group = 'Control', spectrum_method = 'welch')
+    # wake_bandwidth_power_percentile(group = 'Control', spectrum_method = 'welch')
+    # sleep_bandwidth_power_percentile(group = 'Control', spectrum_method = 'welch')
+    plot_compare_wake(bandwidth = [6,9], spectrum_method = 'welch', agg_type='median')
+    plot_compare_wake(bandwidth = [32,45], spectrum_method = 'welch', agg_type='median')
+    plot_compare_wake(bandwidth = [.75,4], spectrum_method = 'welch', agg_type='median')
+    plot_compare_sleep(bandwidth = [6,9],state = 'r', spectrum_method = 'welch', agg_type='median')
+    plot_compare_sleep(bandwidth = [.75,4],state = 'n', spectrum_method = 'welch', agg_type='median')
     plt.show()

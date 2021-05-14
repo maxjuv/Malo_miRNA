@@ -1,7 +1,7 @@
 from configuration import *
-os.system('pwd')
-os.system('which python')
-os.system('python --version')
+# os.system('pwd')
+# os.system('which python')
+# os.system('python --version')
 
 
 
@@ -25,16 +25,34 @@ os.system('python --version')
 #     files = [f[4:] for f in files]
 #     return files
 
-def get_mice(group):
-    df_excel = pd.read_excel(work_dir + 'datetime_reference_DICER.xls', index_col = 0)
-    mylist = df_excel[df_excel.group == group].index.to_list()
+def get_mice(miRNA, genotype, exclude_mice=False):
+    df_excel = pd.read_excel(work_dir + 'datetime_reference_miRNA.xlsx', index_col = 0)
+    df_excel['miRNA'] = df_excel['miRNA'].astype('str')
+    mylist = df_excel[(df_excel.genotype == genotype) & (df_excel.miRNA == miRNA)].index.to_list()
     files = [i[4:] for i in mylist]
+    if exclude_mice:
+        mice = []
+        for mouse in files:
+            if mouse not in RT_PCR_execption:
+                mice.append(mouse)
+    else :
+        mice = files
+    return mice
 
-    return files
+def get_mouse_info(mouse):
+    df_excel = pd.read_excel(work_dir + 'datetime_reference_miRNA.xlsx', index_col = 0)
+    miRNA = str(df_excel.at['MTA-{}'.format(mouse), 'miRNA'])
+    genotype = df_excel.at['MTA-{}'.format(mouse), 'genotype']
+    return miRNA, genotype
 
 
 
 if __name__ == '__main__':
-    print(get_mice('Control'))
+
+    # get_mouse_info('B2884')
+    # print(get_mice('137', 'test'))
+    print(get_mice('137', 'test'))
+    print(get_mice('137', 'test', True))
+    print(RT_PCR_execption)
     # print(get_mice_for_spectrum('Control'))
     # print(get_mice_for_spectrum('DCR-HCRT'))
